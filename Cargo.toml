@@ -1,0 +1,13 @@
+[package]
+name = "x-lang"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.95"
+clap = { version = "4.5.27", features = ["derive"] }
+inkwell = { version = "0.5.0", features = ["llvm15-0"] }
+llvm-sys = "150.0.0"
+thiserror = "2.0.11"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
