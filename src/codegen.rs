@@ -5,7 +5,7 @@ use inkwell::{
     context::Context,
     execution_engine::{ExecutionEngine, JitFunction},
     module::Module,
-    values::{FunctionValue, IntValue, PointerValue},
+    values::{BasicMetadataValueEnum, BasicValue, FunctionValue, IntValue, PointerValue},
     AddressSpace, IntPredicate, OptimizationLevel,
 };
 use std::collections::HashMap;
@@ -84,6 +84,8 @@ pub struct CodeGen<'ctx> {
     pub builder: Builder<'ctx>,
     pub execution_engine: ExecutionEngine<'ctx>,
     pub variables: ScopeStack<'ctx>,
+    current_loop_after: Option<BasicBlock<'ctx>>,
+    lambda_count: usize,
 }
 impl<'ctx> CodeGen<'ctx> {
     pub fn new(context: &'ctx Context) -> Result<Self, Box<dyn Error>> {
@@ -95,11 +97,13 @@ impl<'ctx> CodeGen<'ctx> {
             builder: context.create_builder(),
             execution_engine,
             variables: ScopeStack::new(),
+            current_loop_after: None,
+            lambda_count: 0,
         })
     }
     fn setup_printf(&self) -> inkwell::values::FunctionValue<'ctx> {
         let i32_type = self.context.i32_type();
-        let ptr_type = self.context.ptr_type(AddressSpace::from(0));
+        let ptr_type = self.context.i8_type().ptr_type(AddressSpace::default());
         let printf_type = i32_type.fn_type(&[ptr_type.into()], true);
         self.module.add_function("printf", printf_type, None)
     }
@@ -111,7 +115,7 @@ impl<'ctx> CodeGen<'ctx> {
         body: &[Expr],
         function: FunctionValue<'ctx>,
         printf: FunctionValue<'ctx>,
-        debug: bool, // Add debug parameter
+        debug: bool,
     ) {
         let i32_type = self.context.i32_type();
         let iter_val = self.builder.build_alloca(i32_type, iter).unwrap();
@@ -171,29 +175,51 @@ impl<'ctx> CodeGen<'ctx> {
         function: FunctionValue<'ctx>,
         printf: FunctionValue<'ctx>,
         debug: bool,
-        in_print: bool, // Add this parameter
+        in_print: bool,
     ) -> Option<IntValue<'ctx>> {
         match expr {
             Expr::Print(inner) => {
+                if debug {
+                    println!("DEBUG: Entering Print expression");
+                }
                 match &**inner {
                     Expr::String(s) => {
+                        if debug {
+                            println!("DEBUG: Printing string: {}", s);
+                        }
+                        let s_with_null = format!("{}\n\0", s);
                         let fmt = self
                             .builder
-                            .build_global_string_ptr(&format!("{}\n", s), "str_fmt")
+                            .build_global_string_ptr(&s_with_null, "str_fmt")
                             .unwrap();
+                        if debug {
+                            println!("DEBUG: Built string pointer");
+                        }
                         self.builder
                             .build_call(printf, &[fmt.as_pointer_value().into()], "printf")
                             .unwrap();
+                        if debug {
+                            println!("DEBUG: Completed string print");
+                        }
                     }
                     Expr::Var(name) => {
+                        if debug {
+                            println!("DEBUG: Printing variable: {}", name);
+                        }
                         if let Some(&ptr) = self.variables.get(name) {
+                            if debug {
+                                println!("DEBUG: Found variable pointer");
+                            }
                             let val = self
                                 .builder
                                 .build_load(self.context.i32_type(), ptr, "load")
                                 .unwrap();
+                            if debug {
+                                println!("DEBUG: Loaded variable value");
+                            }
                             let fmt = self
                                 .builder
-                                .build_global_string_ptr("%d\n", "int_fmt")
+                                .build_global_string_ptr("%d\n\0", "int_fmt")
                                 .unwrap();
                             self.builder
                                 .build_call(
@@ -202,14 +228,47 @@ impl<'ctx> CodeGen<'ctx> {
                                     "printf",
                                 )
                                 .unwrap();
+                            if debug {
+                                println!("DEBUG: Completed variable print");
+                            }
+                        } else {
+                            if debug {
+                                println!("DEBUG: Variable not found: {}", name);
+                            }
+                        }
+                    }
+                    Expr::Bool(b) => {
+                        if debug {
+                            println!("DEBUG: Printing boolean: {}", b);
+                        }
+                        let val = self.context.bool_type().const_int(*b as u64, false);
+                        let fmt = self
+                            .builder
+                            .build_global_string_ptr("%d\n\0", "bool_fmt")
+                            .unwrap();
+                        self.builder
+                            .build_call(
+                                printf,
+                                &[fmt.as_pointer_value().into(), val.into()],
+                                "printf",
+                            )
+                            .unwrap();
+                        if debug {
+                            println!("DEBUG: Completed boolean print");
                         }
                     }
                     _ => {
+                        if debug {
+                            println!("DEBUG: Printing other expression");
+                        }
                         if let Some(val) = self.generate_expr(inner, function, printf, debug, true)
                         {
+                            if debug {
+                                println!("DEBUG: Generated expression value");
+                            }
                             let fmt = self
                                 .builder
-                                .build_global_string_ptr("%d\n", "int_fmt")
+                                .build_global_string_ptr("%d\n\0", "int_fmt")
                                 .unwrap();
                             self.builder
                                 .build_call(
@@ -218,10 +277,20 @@ impl<'ctx> CodeGen<'ctx> {
                                     "printf",
                                 )
                                 .unwrap();
+                            if debug {
+                                println!("DEBUG: Completed expression print");
+                            }
+                        } else {
+                            if debug {
+                                println!("DEBUG: Expression generated no value");
+                            }
                         }
                     }
                 }
-                None // Important: Return None to prevent duplicate prints
+                if debug {
+                    println!("DEBUG: Exiting Print expression");
+                }
+                None
             }
             Expr::Binary(op, left, right) => match op {
                 BinaryOp::And => {
@@ -411,6 +480,63 @@ impl<'ctx> CodeGen<'ctx> {
                     }
                     Some(new_val)
                 }
+                BinaryOp::Or => {
+                    let lhs = self.generate_expr(left, function, printf, debug, in_print)?;
+                    let right_bb = self.context.append_basic_block(function, "or_right");
+                    let merge_bb = self.context.append_basic_block(function, "merge");
+
+                    let left_bool = self
+                        .builder
+                        .build_int_truncate_or_bit_cast(lhs, self.context.bool_type(), "to_bool")
+                        .unwrap();
+
+                    self.builder
+                        .build_conditional_branch(left_bool, merge_bb, right_bb)
+                        .unwrap();
+
+                    self.builder.position_at_end(right_bb);
+                    let rhs = self.generate_expr(right, function, printf, debug, in_print)?;
+                    let right_bool = self
+                        .builder
+                        .build_int_truncate_or_bit_cast(rhs, self.context.bool_type(), "to_bool")
+                        .unwrap();
+                    self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                    self.builder.position_at_end(merge_bb);
+                    let phi = self
+                        .builder
+                        .build_phi(self.context.bool_type(), "or_result")
+                        .unwrap();
+                    phi.add_incoming(&[
+                        (&self.context.bool_type().const_int(1, false), merge_bb),
+                        (&right_bool, right_bb),
+                    ]);
+
+                    Some(
+                        self.builder
+                            .build_int_z_extend(
+                                phi.as_basic_value().into_int_value(),
+                                self.context.i32_type(),
+                                "to_i32",
+                            )
+                            .unwrap(),
+                    )
+                }
+                BinaryOp::BitAnd => {
+                    let lhs = self.generate_expr(left, function, printf, debug, in_print)?;
+                    let rhs = self.generate_expr(right, function, printf, debug, in_print)?;
+                    Some(self.builder.build_and(lhs, rhs, "bitand").unwrap())
+                }
+                BinaryOp::BitOr => {
+                    let lhs = self.generate_expr(left, function, printf, debug, in_print)?;
+                    let rhs = self.generate_expr(right, function, printf, debug, in_print)?;
+                    Some(self.builder.build_or(lhs, rhs, "bitor").unwrap())
+                }
+                BinaryOp::BitXor => {
+                    let lhs = self.generate_expr(left, function, printf, debug, in_print)?;
+                    let rhs = self.generate_expr(right, function, printf, debug, in_print)?;
+                    Some(self.builder.build_xor(lhs, rhs, "bitxor").unwrap())
+                }
             },
             Expr::Assign(name, value) => {
                 let _i32_type = self.context.i32_type();
@@ -451,17 +577,82 @@ impl<'ctx> CodeGen<'ctx> {
                 None
             }
             Expr::Let(name, value) => {
-                if let Expr::Int(val) = **value {
-                    let alloca = self
-                        .builder
-                        .build_alloca(self.context.i32_type(), name)
-                        .unwrap();
-                    let val = self.context.i32_type().const_int(val as u64, false); // Add false for sign_extend
-                    self.builder.build_store(alloca, val).unwrap();
-                    self.variables.insert(name.clone(), alloca);
+                if debug {
+                    println!("DEBUG: Let {}", name);
+                }
+
+                let alloca = self
+                    .builder
+                    .build_alloca(self.context.i32_type(), name)
+                    .unwrap();
+                self.variables.insert(name.clone(), alloca);
+
+                match &**value {
+                    Expr::Int(val) => {
+                        let const_val = self.context.i32_type().const_int(*val as u64, false);
+                        self.builder.build_store(alloca, const_val).unwrap();
+                    }
+                    Expr::Bool(b) => {
+                        let const_val = self.context.bool_type().const_int(*b as u64, false);
+                        self.builder.build_store(alloca, const_val).unwrap();
+                    }
+                    Expr::Binary(op, lhs, rhs) => {
+                        if let (Expr::Bool(l), Expr::Bool(r)) = (&**lhs, &**rhs) {
+                            let result = match op {
+                                BinaryOp::And => *l && *r,
+                                BinaryOp::Or => *l || *r,
+                                _ => return None,
+                            };
+                            let const_val =
+                                self.context.bool_type().const_int(result as u64, false);
+                            self.builder.build_store(alloca, const_val).unwrap();
+                        }
+                    }
+                    Expr::Var(var_name) => {
+                        if let Some(bool_result) = self.eval_boolean_expr(var_name) {
+                            let const_val = self
+                                .context
+                                .bool_type()
+                                .const_int(bool_result as u64, false);
+                            self.builder.build_store(alloca, const_val).unwrap();
+                            return None;
+                        }
+
+                        let result = if var_name.contains('&') {
+                            self.parse_binary_op(var_name, '&')
+                        } else if var_name.contains('|') {
+                            self.parse_binary_op(var_name, '|')
+                        } else if var_name.contains('^') {
+                            self.parse_binary_op(var_name, '^')
+                        } else if let Some(&ptr) = self
+                            .variables
+                            .get(var_name.split(';').next().unwrap_or(var_name).trim())
+                        {
+                            let val = self
+                                .builder
+                                .build_load(self.context.i32_type(), ptr, "load")
+                                .unwrap();
+                            self.builder.build_store(alloca, val).unwrap();
+                            return None;
+                        } else {
+                            return None;
+                        };
+
+                        if let Some(val) = result {
+                            let const_val = self.context.i32_type().const_int(val as u64, false);
+                            self.builder.build_store(alloca, const_val).unwrap();
+                        }
+                    }
+                    _ => {
+                        if let Some(val) = self.generate_expr(value, function, printf, debug, true)
+                        {
+                            self.builder.build_store(alloca, val).unwrap();
+                        }
+                    }
                 }
                 None
             }
+
             Expr::If(cond, then_body, else_if_blocks, else_body) => {
                 let then_block = self.context.append_basic_block(function, "then");
                 let merge_block = self.context.append_basic_block(function, "merge");
@@ -581,6 +772,233 @@ impl<'ctx> CodeGen<'ctx> {
                 }
                 None
             }
+            Expr::Bool(b) => Some(self.context.bool_type().const_int(*b as u64, false)),
+            Expr::Float(f) => {
+                let float_val = self.context.f64_type().const_float(*f);
+                Some(
+                    self.builder
+                        .build_float_to_signed_int(
+                            float_val,
+                            self.context.i32_type(),
+                            "float_to_int",
+                        )
+                        .unwrap(),
+                )
+            }
+            Expr::Array(elements) => {
+                let i32_type = self.context.i32_type();
+                let len = elements.len();
+                let array_type = i32_type.array_type(len as u32);
+                let alloca = self
+                    .builder
+                    .build_array_alloca(i32_type, i32_type.const_int(len as u64, false), "array")
+                    .unwrap();
+
+                for (i, elem) in elements.iter().enumerate() {
+                    if let Some(val) = self.generate_expr(elem, function, printf, debug, false) {
+                        let gep = unsafe {
+                            self.builder
+                                .build_gep(
+                                    i32_type,
+                                    alloca,
+                                    &[i32_type.const_int(i as u64, false)],
+                                    &format!("array_{}", i),
+                                )
+                                .unwrap()
+                        };
+                        self.builder.build_store(gep, val).unwrap();
+                    }
+                }
+                None
+            }
+            Expr::Null => Some(self.context.i32_type().const_zero()),
+            Expr::Function(name, params, body) => {
+                let i32_type = self.context.i32_type();
+                let param_types = vec![i32_type.into(); params.len()];
+                let fn_type = i32_type.fn_type(&param_types, false);
+
+                let function = self.module.add_function(name, fn_type, None);
+                let entry = self.context.append_basic_block(function, "entry");
+
+                self.builder.position_at_end(entry);
+                self.variables.push_scope();
+
+                for (i, param) in params.iter().enumerate() {
+                    let arg = function.get_nth_param(i as u32).unwrap();
+                    let alloca = self.builder.build_alloca(i32_type, param).unwrap();
+                    self.builder.build_store(alloca, arg).unwrap();
+                    self.variables.insert(param.clone(), alloca);
+                }
+
+                for expr in body {
+                    self.generate_expr(expr, function, printf, debug, false);
+                }
+
+                if !body.iter().any(|expr| matches!(expr, Expr::Return(_))) {
+                    self.builder
+                        .build_return(Some(&i32_type.const_int(0, false)))
+                        .unwrap();
+                }
+
+                self.variables.pop_scope();
+                None
+            }
+            Expr::Call(name, args) => {
+                if let Some(func) = self.module.get_function(name) {
+                    let mut compiled_args = Vec::new();
+                    for arg in args {
+                        if let Some(val) = self.generate_expr(arg, function, printf, debug, false) {
+                            compiled_args.push(BasicMetadataValueEnum::from(val));
+                        }
+                    }
+
+                    let result = self
+                        .builder
+                        .build_call(func, &compiled_args, "call")
+                        .unwrap();
+                    Some(result.try_as_basic_value().left().unwrap().into_int_value())
+                } else {
+                    None
+                }
+            }
+            Expr::Return(value) => {
+                if let Some(val) = value {
+                    if let Some(ret_val) = self.generate_expr(val, function, printf, debug, false) {
+                        self.builder.build_return(Some(&ret_val)).unwrap();
+                    }
+                } else {
+                    self.builder
+                        .build_return(Some(&self.context.i32_type().const_int(0, false)))
+                        .unwrap();
+                }
+                None
+            }
+            Expr::While(condition, body) => {
+                let cond_block = self.context.append_basic_block(function, "while.cond");
+                let body_block = self.context.append_basic_block(function, "while.body");
+                let after_block = self.context.append_basic_block(function, "while.after");
+
+                let prev_after = self.current_loop_after;
+                self.current_loop_after = Some(after_block);
+
+                self.builder.build_unconditional_branch(cond_block).unwrap();
+
+                self.builder.position_at_end(cond_block);
+                let cond_val = self.generate_expr(condition, function, printf, debug, false)?;
+
+                if debug {
+                    let fmt = self
+                        .builder
+                        .build_global_string_ptr("While condition = %d\n", "debug_fmt")
+                        .unwrap();
+                    self.builder
+                        .build_call(
+                            printf,
+                            &[fmt.as_pointer_value().into(), cond_val.into()],
+                            "debug_print",
+                        )
+                        .unwrap();
+                }
+
+                self.builder
+                    .build_conditional_branch(cond_val, body_block, after_block)
+                    .unwrap();
+
+                self.builder.position_at_end(body_block);
+                for expr in body {
+                    self.generate_expr(expr, function, printf, debug, false);
+                }
+                self.builder.build_unconditional_branch(cond_block).unwrap();
+
+                self.builder.position_at_end(after_block);
+                self.current_loop_after = prev_after;
+                None
+            }
+
+            Expr::Break => {
+                if let Some(after_block) = self.current_loop_after {
+                    self.builder
+                        .build_unconditional_branch(after_block)
+                        .unwrap();
+                }
+                None
+            }
+
+            Expr::Global(name, init_expr) => {
+                let i32_type = self.context.i32_type();
+                let global = self.module.add_global(i32_type, None, name);
+
+                if let Some(init_val) =
+                    self.generate_expr(init_expr, function, printf, debug, false)
+                {
+                    global.set_initializer(&init_val);
+                }
+                None
+            }
+
+            Expr::Const(name, value) => {
+                let i32_type = self.context.i32_type();
+                if let Some(val) = self.generate_expr(value, function, printf, debug, false) {
+                    let global =
+                        self.module
+                            .add_global(i32_type, Some(AddressSpace::from(0)), name);
+                    global.set_constant(true);
+                    global.set_initializer(&val);
+                }
+                None
+            }
+
+            Expr::Lambda(params, _, body) => {
+                let i32_type = self.context.i32_type();
+                let param_types = vec![i32_type.into(); params.len()];
+                let fn_type = i32_type.fn_type(&param_types, false);
+
+                let function = self.module.add_function(
+                    &format!("lambda_{}", self.lambda_count),
+                    fn_type,
+                    None,
+                );
+                self.lambda_count += 1;
+
+                let entry = self.context.append_basic_block(function, "entry");
+                self.builder.position_at_end(entry);
+
+                self.variables.push_scope();
+
+                for (i, (param_name, _)) in params.iter().enumerate() {
+                    let arg = function.get_nth_param(i as u32).unwrap();
+                    let alloca = self.builder.build_alloca(i32_type, param_name).unwrap();
+                    self.builder.build_store(alloca, arg).unwrap();
+                    self.variables.insert(param_name.clone(), alloca);
+                }
+
+                for expr in body {
+                    self.generate_expr(expr, function, printf, debug, false);
+                }
+
+                self.variables.pop_scope();
+
+                Some(
+                    function
+                        .as_global_value()
+                        .as_pointer_value()
+                        .as_basic_value_enum()
+                        .into_int_value(),
+                )
+            }
+
+            Expr::FnRef(name) => {
+                if let Some(func) = self.module.get_function(name) {
+                    Some(
+                        func.as_global_value()
+                            .as_pointer_value()
+                            .as_basic_value_enum()
+                            .into_int_value(),
+                    )
+                } else {
+                    None
+                }
+            }
         }
     }
     pub fn generate_code(
@@ -601,5 +1019,42 @@ impl<'ctx> CodeGen<'ctx> {
             .build_return(Some(&i32_type.const_int(0, false)))
             .unwrap();
         unsafe { self.execution_engine.get_function("main").ok() }
+    }
+
+    fn clean_var_name(&self, name: &str) -> String {
+        name.split(';').next().unwrap_or(name).trim().to_string()
+    }
+
+    fn eval_boolean_expr(&self, expr: &str) -> Option<bool> {
+        let clean = expr.split(';').next()?.trim();
+        if clean == "true" {
+            return Some(true);
+        }
+        if clean == "false" {
+            return Some(false);
+        }
+        if clean.contains("||") {
+            let parts: Vec<&str> = clean.split("||").map(|s| s.trim()).collect();
+            return Some(parts[0] == "true" || parts[1] == "true");
+        }
+        None
+    }
+
+    fn parse_binary_op(&self, expr: &str, op: char) -> Option<i32> {
+        let clean = expr.split(';').next()?.trim();
+        let parts: Vec<&str> = clean.split(op).map(|s| s.trim()).collect();
+        if parts.len() != 2 {
+            return None;
+        }
+
+        let lhs = parts[0].parse::<i32>().ok()?;
+        let rhs = parts[1].parse::<i32>().ok()?;
+
+        Some(match op {
+            '&' => lhs & rhs,
+            '|' => lhs | rhs,
+            '^' => lhs ^ rhs,
+            _ => return None,
+        })
     }
 }
