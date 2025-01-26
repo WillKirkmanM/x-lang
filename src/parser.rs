@@ -10,10 +10,17 @@ fn parse_value(value_str: &str) -> Box<Expr> {
         Box::new(Expr::String(value_str[1..value_str.len() - 1].to_string()))
     } else if let Ok(num) = value_str.parse::<i32>() {
         Box::new(Expr::Int(num))
+    } else if let Ok(num) = value_str.parse::<f64>() {
+        Box::new(Expr::Float(num))
+    } else if value_str == "true" || value_str == "false" {
+        Box::new(Expr::Bool(value_str == "true"))
+    } else if value_str == "null" {
+        Box::new(Expr::Null)
     } else {
         Box::new(Expr::Var(value_str.to_string()))
     }
 }
+
 fn parse_binary_operation(line: &str) -> Option<Expr> {
     let line = line.trim();
     if line.starts_with('(') && line.ends_with(')') {
@@ -116,6 +123,47 @@ fn parse_if_statement(
         None
     }
 }
+fn parse_while_loop(line: &str, content_lines: &mut Peekable<std::str::Lines>) -> Option<Expr> {
+    if let Some(condition) = line.strip_prefix("while ").map(|s| s.trim_end_matches(" {")) {
+        let condition_expr = parse_binary_operation(condition)?;
+        let body = parse_block(content_lines);
+        Some(Expr::While(Box::new(condition_expr), body))
+    } else {
+        None
+    }
+}
+fn parse_return(line: &str) -> Option<Expr> {
+    if let Some(value) = line.strip_prefix("return ") {
+        let value = value.trim_end_matches(';');
+        if value.is_empty() {
+            Some(Expr::Return(None))
+        } else if let Some(expr) = parse_binary_operation(value) {
+            Some(Expr::Return(Some(Box::new(expr))))
+        } else {
+            Some(Expr::Return(Some(parse_value(value))))
+        }
+    } else {
+        None
+    }
+}
+fn parse_global(line: &str) -> Option<Expr> {
+    if let Some(remainder) = line.strip_prefix("global ") {
+        let parts: Vec<&str> = remainder.splitn(2, '=').collect();
+        if parts.len() == 2 {
+            let var_name = parts[0].trim().to_string();
+            let value_str = parts[1].trim().trim_end_matches(';');
+            if let Some(expr) = parse_binary_operation(value_str) {
+                Some(Expr::Global(var_name, Box::new(expr)))
+            } else {
+                Some(Expr::Global(var_name, parse_value(value_str)))
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    }
+}
 fn parse_block(content_lines: &mut std::iter::Peekable<std::str::Lines>) -> Vec<Expr> {
     let mut body = Vec::new();
     let mut brace_count = 1;
@@ -139,6 +187,15 @@ fn parse_block(content_lines: &mut std::iter::Peekable<std::str::Lines>) -> Vec<
 }
 pub fn parse_line(line: &str) -> Option<Expr> {
     let line = line.trim();
+    if line == "break" {
+        return Some(Expr::Break);
+    }
+    if line.starts_with("return") {
+        return parse_return(line);
+    }
+    if line.starts_with("global") {
+        return parse_global(line);
+    }
     if let Some(remainder) = line.strip_prefix("let ") {
         let parts: Vec<&str> = remainder.splitn(2, '=').collect();
         if parts.len() == 2 {
@@ -235,6 +292,12 @@ pub fn parse_file(content: &str) -> Vec<Expr> {
         }
         if trimmed.starts_with("for ") {
             if let Some(expr) = parse_for_loop(trimmed, &mut content_lines) {
+                exprs.push(expr);
+                continue;
+            }
+        }
+        if trimmed.starts_with("while ") {
+            if let Some(expr) = parse_while_loop(trimmed, &mut content_lines) {
                 exprs.push(expr);
                 continue;
             }
