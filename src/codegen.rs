@@ -1,83 +1,15 @@
-use crate::ast::{BinaryOp, Expr};
+use crate::{ast::{BinaryOp, Expr}, binary_ops, scope::ScopeStack};
 use inkwell::{
     basic_block::BasicBlock,
     builder::Builder,
     context::Context,
     execution_engine::{ExecutionEngine, JitFunction},
     module::Module,
-    values::{BasicMetadataValueEnum, BasicValue, FunctionValue, IntValue, PointerValue},
+    values::{BasicMetadataValueEnum, BasicValue, FunctionValue, IntValue},
     AddressSpace, IntPredicate, OptimizationLevel,
 };
-use std::collections::HashMap;
 use std::error::Error;
-pub struct ScopeStack<'ctx> {
-    scopes: Vec<HashMap<String, PointerValue<'ctx>>>,
-}
-impl<'ctx> ScopeStack<'ctx> {
-    pub fn new() -> Self {
-        let mut scopes = Vec::new();
-        scopes.push(HashMap::new()); // Global scope
-        Self { scopes }
-    }
-    pub fn push_scope(&mut self) {
-        self.scopes.push(HashMap::new());
-    }
-    pub fn pop_scope(&mut self) {
-        if self.scopes.len() > 1 {
-            self.scopes.pop();
-        }
-    }
-    pub fn get(&self, name: &str) -> Option<&PointerValue<'ctx>> {
-        for scope in self.scopes.iter().rev() {
-            if let Some(val) = scope.get(name) {
-                return Some(val);
-            }
-        }
-        None
-    }
-    pub fn insert(&mut self, name: String, value: PointerValue<'ctx>) {
-        if let Some(scope) = self.scopes.last_mut() {
-            scope.insert(name, value);
-        }
-    }
-    pub fn get_or_create(
-        &mut self,
-        name: &str,
-        builder: &Builder<'ctx>,
-        i32_type: inkwell::types::IntType<'ctx>,
-    ) -> PointerValue<'ctx> {
-        if let Some(ptr) = self.get(name) {
-            *ptr
-        } else {
-            let alloca = builder.build_alloca(i32_type, name).unwrap();
-            if self.scopes.is_empty() {
-                self.push_scope();
-            }
-            self.scopes
-                .last_mut()
-                .unwrap()
-                .insert(name.to_string(), alloca);
-            alloca
-        }
-    }
-    pub fn update(&mut self, name: &str, value: PointerValue<'ctx>) -> bool {
-        for scope in self.scopes.iter_mut().rev() {
-            if scope.contains_key(name) {
-                scope.insert(name.to_string(), value);
-                return true;
-            }
-        }
-        false
-    }
-    pub fn get_mut(&mut self, name: &str) -> Option<&mut PointerValue<'ctx>> {
-        for scope in self.scopes.iter_mut().rev() {
-            if let Some(val) = scope.get_mut(name) {
-                return Some(val);
-            }
-        }
-        None
-    }
-}
+
 pub struct CodeGen<'ctx> {
     pub context: &'ctx Context,
     pub module: Module<'ctx>,
@@ -87,6 +19,7 @@ pub struct CodeGen<'ctx> {
     current_loop_after: Option<BasicBlock<'ctx>>,
     lambda_count: usize,
 }
+
 impl<'ctx> CodeGen<'ctx> {
     pub fn new(context: &'ctx Context) -> Result<Self, Box<dyn Error>> {
         let module = context.create_module("hello");
@@ -169,7 +102,7 @@ impl<'ctx> CodeGen<'ctx> {
         self.builder.position_at_end(after_bb);
         self.variables.pop_scope();
     }
-    fn generate_expr(
+    pub fn generate_expr(
         &mut self,
         expr: &Expr,
         function: FunctionValue<'ctx>,
@@ -293,250 +226,26 @@ impl<'ctx> CodeGen<'ctx> {
                 None
             }
             Expr::Binary(op, left, right) => match op {
-                BinaryOp::And => {
-                    let lhs = self.generate_expr(left, function, printf, debug, in_print)?;
-                    let right_bb = self.context.append_basic_block(function, "and_right");
-                    let merge_bb = self.context.append_basic_block(function, "merge");
-                    let left_bool = self
-                        .builder
-                        .build_int_truncate_or_bit_cast(lhs, self.context.bool_type(), "to_bool")
-                        .unwrap();
-                    self.builder
-                        .build_conditional_branch(left_bool, right_bb, merge_bb)
-                        .unwrap();
-                    self.builder.position_at_end(right_bb);
-                    let rhs = self.generate_expr(right, function, printf, debug, in_print)?;
-                    let right_bool = self
-                        .builder
-                        .build_int_truncate_or_bit_cast(rhs, self.context.bool_type(), "to_bool")
-                        .unwrap();
-                    self.builder.build_unconditional_branch(merge_bb).unwrap();
-                    self.builder.position_at_end(merge_bb);
-                    let phi = self
-                        .builder
-                        .build_phi(self.context.bool_type(), "and_result")
-                        .unwrap();
-                    phi.add_incoming(&[
-                        (&self.context.bool_type().const_int(0, false), merge_bb),
-                        (&right_bool, right_bb),
-                    ]);
-                    Some(
-                        self.builder
-                            .build_int_z_extend(
-                                phi.as_basic_value().into_int_value(),
-                                self.context.i32_type(),
-                                "to_i32",
-                            )
-                            .unwrap(),
-                    )
-                }
-                BinaryOp::Mod => {
-                    let lhs = self.generate_expr(left, function, printf, debug, in_print)?;
-                    let rhs = self.generate_expr(right, function, printf, debug, in_print)?;
-                    let zero = self.context.i32_type().const_int(0, false);
-                    let is_zero = self
-                        .builder
-                        .build_int_compare(IntPredicate::EQ, rhs, zero, "is_zero")
-                        .unwrap();
-                    let safe_bb = self.context.append_basic_block(function, "safe_mod");
-                    let error_bb = self.context.append_basic_block(function, "mod_error");
-                    let merge_bb = self.context.append_basic_block(function, "merge");
-                    self.builder
-                        .build_conditional_branch(is_zero, error_bb, safe_bb)
-                        .unwrap();
-                    self.builder.position_at_end(safe_bb);
-                    let mod_result = self.builder.build_int_signed_rem(lhs, rhs, "mod").unwrap();
-                    self.builder.build_unconditional_branch(merge_bb).unwrap();
-                    self.builder.position_at_end(error_bb);
-                    let fmt = self
-                        .builder
-                        .build_global_string_ptr("Error: Division by zero\n", "error_fmt")
-                        .unwrap();
-                    self.builder
-                        .build_call(printf, &[fmt.as_pointer_value().into()], "printf")
-                        .unwrap();
-                    self.builder.build_unconditional_branch(merge_bb).unwrap();
-                    self.builder.position_at_end(merge_bb);
-                    Some(mod_result)
-                }
-                BinaryOp::Eq => {
-                    let lhs = self.generate_expr(left, function, printf, debug, in_print)?;
-                    let rhs = self.generate_expr(right, function, printf, debug, in_print)?;
-                    Some(
-                        self.builder
-                            .build_int_compare(IntPredicate::EQ, lhs, rhs, "eq")
-                            .unwrap(),
-                    )
-                }
-                BinaryOp::Add => {
-                    let lhs = self.generate_expr(left, function, printf, debug, in_print)?;
-                    let rhs = self.generate_expr(right, function, printf, debug, in_print)?;
-                    Some(self.builder.build_int_add(lhs, rhs, "add").unwrap())
-                }
-                BinaryOp::Sub => {
-                    let lhs = self.generate_expr(left, function, printf, debug, in_print)?;
-                    let rhs = self.generate_expr(right, function, printf, debug, in_print)?;
-                    Some(self.builder.build_int_sub(lhs, rhs, "sub").unwrap())
-                }
-                BinaryOp::Mul => {
-                    let lhs = self.generate_expr(left, function, printf, debug, in_print)?;
-                    let rhs = self.generate_expr(right, function, printf, debug, in_print)?;
-                    Some(self.builder.build_int_mul(lhs, rhs, "mul").unwrap())
-                }
-                BinaryOp::Div => {
-                    let lhs = self.generate_expr(left, function, printf, debug, in_print)?;
-                    let rhs = self.generate_expr(right, function, printf, debug, in_print)?;
-                    Some(self.builder.build_int_signed_div(lhs, rhs, "div").unwrap())
-                }
-                BinaryOp::Gt => {
-                    let lhs = self.generate_expr(left, function, printf, debug, in_print)?;
-                    let rhs = self.generate_expr(right, function, printf, debug, in_print)?;
-                    Some(
-                        self.builder
-                            .build_int_compare(IntPredicate::SGT, lhs, rhs, "gt")
-                            .unwrap(),
-                    )
-                }
-                BinaryOp::Lt => {
-                    let lhs = self.generate_expr(left, function, printf, debug, in_print)?;
-                    let rhs = self.generate_expr(right, function, printf, debug, in_print)?;
-                    Some(
-                        self.builder
-                            .build_int_compare(IntPredicate::SLT, lhs, rhs, "lt")
-                            .unwrap(),
-                    )
-                }
-                BinaryOp::Ge => {
-                    let lhs = self.generate_expr(left, function, printf, debug, in_print)?;
-                    let rhs = self.generate_expr(right, function, printf, debug, in_print)?;
-                    Some(
-                        self.builder
-                            .build_int_compare(IntPredicate::SGE, lhs, rhs, "ge")
-                            .unwrap(),
-                    )
-                }
-                BinaryOp::Le => {
-                    let lhs = self.generate_expr(left, function, printf, debug, in_print)?;
-                    let rhs = self.generate_expr(right, function, printf, debug, in_print)?;
-                    Some(
-                        self.builder
-                            .build_int_compare(IntPredicate::SLE, lhs, rhs, "le")
-                            .unwrap(),
-                    )
-                }
-                BinaryOp::Ne => {
-                    let lhs = self.generate_expr(left, function, printf, debug, in_print)?;
-                    let rhs = self.generate_expr(right, function, printf, debug, in_print)?;
-                    Some(
-                        self.builder
-                            .build_int_compare(IntPredicate::NE, lhs, rhs, "ne")
-                            .unwrap(),
-                    )
-                }
-                BinaryOp::AddAssign => {
-                    let lhs = self.generate_expr(left, function, printf, debug, in_print)?;
-                    let rhs = self.generate_expr(right, function, printf, debug, in_print)?;
-                    let new_val = self.builder.build_int_add(lhs, rhs, "addassign").unwrap();
-                    if let Expr::String(name) = &**left {
-                        if let Some(&ptr) = self.variables.get(name) {
-                            self.builder.build_store(ptr, new_val).unwrap();
-                        }
-                    }
-                    Some(new_val)
-                }
-                BinaryOp::SubAssign => {
-                    let lhs = self.generate_expr(left, function, printf, debug, in_print)?;
-                    let rhs = self.generate_expr(right, function, printf, debug, in_print)?;
-                    let new_val = self.builder.build_int_sub(lhs, rhs, "subassign").unwrap();
-                    if let Expr::String(name) = &**left {
-                        if let Some(&ptr) = self.variables.get(name) {
-                            self.builder.build_store(ptr, new_val).unwrap();
-                        }
-                    }
-                    Some(new_val)
-                }
-                BinaryOp::MulAssign => {
-                    let lhs = self.generate_expr(left, function, printf, debug, in_print)?;
-                    let rhs = self.generate_expr(right, function, printf, debug, in_print)?;
-                    let new_val = self.builder.build_int_mul(lhs, rhs, "mulassign").unwrap();
-                    if let Expr::String(name) = &**left {
-                        if let Some(&ptr) = self.variables.get(name) {
-                            self.builder.build_store(ptr, new_val).unwrap();
-                        }
-                    }
-                    Some(new_val)
-                }
-                BinaryOp::DivAssign => {
-                    let lhs = self.generate_expr(left, function, printf, debug, in_print)?;
-                    let rhs = self.generate_expr(right, function, printf, debug, in_print)?;
-                    let new_val = self
-                        .builder
-                        .build_int_signed_div(lhs, rhs, "divassign")
-                        .unwrap();
-                    if let Expr::String(name) = &**left {
-                        if let Some(&ptr) = self.variables.get(name) {
-                            self.builder.build_store(ptr, new_val).unwrap();
-                        }
-                    }
-                    Some(new_val)
-                }
-                BinaryOp::Or => {
-                    let lhs = self.generate_expr(left, function, printf, debug, in_print)?;
-                    let right_bb = self.context.append_basic_block(function, "or_right");
-                    let merge_bb = self.context.append_basic_block(function, "merge");
-
-                    let left_bool = self
-                        .builder
-                        .build_int_truncate_or_bit_cast(lhs, self.context.bool_type(), "to_bool")
-                        .unwrap();
-
-                    self.builder
-                        .build_conditional_branch(left_bool, merge_bb, right_bb)
-                        .unwrap();
-
-                    self.builder.position_at_end(right_bb);
-                    let rhs = self.generate_expr(right, function, printf, debug, in_print)?;
-                    let right_bool = self
-                        .builder
-                        .build_int_truncate_or_bit_cast(rhs, self.context.bool_type(), "to_bool")
-                        .unwrap();
-                    self.builder.build_unconditional_branch(merge_bb).unwrap();
-
-                    self.builder.position_at_end(merge_bb);
-                    let phi = self
-                        .builder
-                        .build_phi(self.context.bool_type(), "or_result")
-                        .unwrap();
-                    phi.add_incoming(&[
-                        (&self.context.bool_type().const_int(1, false), merge_bb),
-                        (&right_bool, right_bb),
-                    ]);
-
-                    Some(
-                        self.builder
-                            .build_int_z_extend(
-                                phi.as_basic_value().into_int_value(),
-                                self.context.i32_type(),
-                                "to_i32",
-                            )
-                            .unwrap(),
-                    )
-                }
-                BinaryOp::BitAnd => {
-                    let lhs = self.generate_expr(left, function, printf, debug, in_print)?;
-                    let rhs = self.generate_expr(right, function, printf, debug, in_print)?;
-                    Some(self.builder.build_and(lhs, rhs, "bitand").unwrap())
-                }
-                BinaryOp::BitOr => {
-                    let lhs = self.generate_expr(left, function, printf, debug, in_print)?;
-                    let rhs = self.generate_expr(right, function, printf, debug, in_print)?;
-                    Some(self.builder.build_or(lhs, rhs, "bitor").unwrap())
-                }
-                BinaryOp::BitXor => {
-                    let lhs = self.generate_expr(left, function, printf, debug, in_print)?;
-                    let rhs = self.generate_expr(right, function, printf, debug, in_print)?;
-                    Some(self.builder.build_xor(lhs, rhs, "bitxor").unwrap())
-                }
+                BinaryOp::And => binary_ops::and::build_and(self, left, right, function, printf, debug, in_print),
+                BinaryOp::Mod => binary_ops::bitmod::build_bitmod(self, left, right, function, printf, debug, in_print),
+                BinaryOp::Eq => { binary_ops::eq::build_eq(self, left, right, function, printf, debug, in_print) }
+                BinaryOp::Add => binary_ops::add::build_add(self, left, right, function, printf, debug, in_print),
+                BinaryOp::Sub => binary_ops::sub::build_sub(self, left, right, function, printf, debug, in_print),
+                BinaryOp::Mul => binary_ops::mul::build_mul(self, left, right, function, printf, debug, in_print),
+                BinaryOp::Div => binary_ops::div::build_div(self, left, right, function, printf, debug, in_print),
+                BinaryOp::Gt => binary_ops::gt::build_gt(self, left, right, function, printf, debug, in_print),
+                BinaryOp::Lt => binary_ops::lt::build_lt(self, left, right, function, printf, debug, in_print),
+                BinaryOp::Ge => binary_ops::ge::build_ge(self, left, right, function, printf, debug, in_print),
+                BinaryOp::Le => binary_ops::le::build_le(self, left, right, function, printf, debug, in_print),
+                BinaryOp::Ne => binary_ops::ne::build_ne(self, left, right, function, printf, debug, in_print),
+                BinaryOp::AddAssign => binary_ops::addassign::build_addassign(self, left, right, function, printf, debug, in_print),
+                BinaryOp::SubAssign => binary_ops::subassign::build_subassign(self, left, right, function, printf, debug, in_print),
+                BinaryOp::MulAssign => binary_ops::mulassign::build_mulassign(self, left, right, function, printf, debug, in_print),
+                BinaryOp::DivAssign => binary_ops::divassign::build_divassign(self, left, right, function, printf, debug, in_print),
+                BinaryOp::Or => binary_ops::or::build_or(self, left, right, function, printf, debug, in_print),
+                BinaryOp::BitAnd => binary_ops::bitand::build_bitand(self, left, right, function, printf, debug, in_print),
+                BinaryOp::BitOr => binary_ops::bitor::build_bitor(self, left, right, function, printf, debug, in_print),
+                BinaryOp::BitXor => binary_ops::bitxor::build_bitxor(self, left, right, function, printf, debug, in_print),
             },
             Expr::Assign(name, value) => {
                 let _i32_type = self.context.i32_type();
@@ -1019,10 +728,6 @@ impl<'ctx> CodeGen<'ctx> {
             .build_return(Some(&i32_type.const_int(0, false)))
             .unwrap();
         unsafe { self.execution_engine.get_function("main").ok() }
-    }
-
-    fn clean_var_name(&self, name: &str) -> String {
-        name.split(';').next().unwrap_or(name).trim().to_string()
     }
 
     fn eval_boolean_expr(&self, expr: &str) -> Option<bool> {
