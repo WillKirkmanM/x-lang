@@ -4,9 +4,13 @@ use inkwell::context::Context;
 use parser::parse_file;
 use std::error::Error;
 use std::fs;
+
 pub mod ast;
 pub mod codegen;
 pub mod parser;
+pub mod scope;
+pub mod binary_ops;
+
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
