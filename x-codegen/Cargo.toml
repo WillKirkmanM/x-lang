@@ -1,0 +1,22 @@
+[package]
+name = "x-codegen"
+version.workspace = true
+edition.workspace = true
+description = "LLVM code generation for X language"
+license = "MIT"
+
+[lib]
+name = "x_codegen" 
+path = "src/lib.rs"
+
+[dependencies]
+x-ast = { path = "../x-ast" }
+inkwell = { version = "0.5.0", features = ["llvm18-0"] }
+llvm-sys = "180.0.0"
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+
+[features]
+default = ["llvm18-0"]
+llvm18-0 = ["inkwell/llvm18-0"]
