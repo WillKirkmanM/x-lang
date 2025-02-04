@@ -1,0 +1,12 @@
+[package]
+name = "x-parser"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+env_logger = "0.11.6"
+lazy_static = "1.5.0"
+log = "0.4.25"
+pest = "2.7.15"
+pest_derive = "2.7.15"
+x-ast = { path = "../x-ast" }
