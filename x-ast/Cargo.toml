@@ -1,0 +1,18 @@
+[package]
+name = "x-ast"
+version.workspace = true
+edition.workspace = true
+description = "AST types and utilities for the X Programming Language"
+license = "MIT"
+
+[lib]
+name = "x_ast"
+path = "src/lib.rs"
+
+[dependencies]
+thiserror = { workspace = true }
+serde = { version = "1.0", features = ["derive"] }
+anyhow = { workspace = true }
+
+[features]
+default = []
