@@ -1,0 +1,19 @@
+WHITESPACE = _{ " " | "\t" | "\n" }
+COMMENT = _{ "//" ~ (!"\n" ~ ANY)* ~ "\n" }
+
+program = { SOI ~ statement* ~ EOI }
+statement = { expr ~ semicolon }
+
+expr = { term ~ ((add | multiply) ~ term)* }
+term = { number }
+
+number = @{ ASCII_DIGIT+ }
+
+infix_operator = _{ add | subtract }
+high_precedence_operator = _{ multiply | divide }
+
+add = { "+" }
+subtract = { "-" }
+multiply = { "*" }
+divide = { "/" }
+semicolon = { ";" }
