@@ -10,11 +10,15 @@ fn parse_term(pair: Pair<Rule>) -> Expr {
     match pair.as_rule() {
         Rule::term => {
             let inner = pair.into_inner().next().unwrap();
-            if inner.as_rule() == Rule::number {
-                let num: i64 = inner.as_str().parse().unwrap();
-                Expr::Number(num)
-            } else {
-                panic!("Expected number inside term")
+            match inner.as_rule() {
+                Rule::number => {
+                    let num: i64 = inner.as_str().parse().unwrap();
+                    Expr::Number(num)
+                }
+                Rule::identifier => {
+                    Expr::Identifier(inner.as_str().to_string())
+                }
+                _ => panic!("Expected number or identifier inside term")
             }
         }
         _ => panic!("Expected term rule")
@@ -71,10 +75,17 @@ fn parse_program(pair: Pair<Rule>) -> Program {
 }
 
 fn parse_statement(pair: Pair<Rule>) -> Statement {
-    let expr = pair.into_inner()
-        .find(|p| p.as_rule() == Rule::expr)
-        .map(parse_expr)
-        .expect("Statement should contain an expression");
-        
-    Statement { expr }
+    let inner = pair.into_inner().next().unwrap();
+    match inner.as_rule() {
+        Rule::expr => Statement::Expression {
+            expr: parse_expr(inner)
+        },
+        Rule::var_decl => {
+            let mut inner_rules = inner.into_inner();
+            let name = inner_rules.next().unwrap().as_str().to_string();
+            let expr = parse_expr(inner_rules.next().unwrap());
+            Statement::VariableDecl { name, value: expr }
+        },
+        _ => unreachable!()
+    }
 }
