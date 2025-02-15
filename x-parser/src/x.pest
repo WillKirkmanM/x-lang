@@ -1,15 +1,28 @@
-WHITESPACE = _{ " " | "\t" | "\n" }
+WHITESPACE = _{ " " | "\t" | "\n" | "\r" }
 COMMENT = _{ "//" ~ (!"\n" ~ ANY)* ~ "\n" }
 
 program = { SOI ~ statement* ~ EOI }
-statement = { (var_decl | expr) ~ semicolon }
+statement = { (var_decl | import | expr) ~ ";" }
+
+import = { "import" ~ module ~ "::" ~ item }
+module = { identifier }
+item = { identifier }
 
 var_decl = { "let" ~ identifier ~ "=" ~ expr }
-identifier = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
-expr = { term ~ ((add | multiply) ~ term)* }
-term = { number | identifier }
 
+expr = { term ~ ((add | subtract | multiply | divide) ~ term)* }
+
+term = { function_call | number | string | identifier }
+
+function_call = { identifier ~ "(" ~ args? ~ ")" }
+args = { expr ~ ("," ~ expr)* }
+
+string = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
+
+identifier = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
 number = @{ ASCII_DIGIT+ }
+
 add = { "+" }
+subtract = { "-" }
 multiply = { "*" }
-semicolon = { ";" }
+divide = { "/" }
