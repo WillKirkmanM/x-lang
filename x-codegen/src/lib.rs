@@ -6,13 +6,14 @@ use inkwell::{
     execution_engine::ExecutionEngine,
     OptimizationLevel,
 };
-use x_ast::{Expr, Operator, Program};
+use x_ast::{Expr, Operator, Program, Statement};
 
 pub struct CodeGen<'ctx> {
     context: &'ctx Context,
     module: Module<'ctx>,
     builder: Builder<'ctx>,
     execution_engine: ExecutionEngine<'ctx>,
+    variables: std::collections::HashMap<String, FloatValue<'ctx>>,
 }
 
 impl<'ctx> CodeGen<'ctx> {
@@ -27,10 +28,11 @@ impl<'ctx> CodeGen<'ctx> {
             module,
             builder,
             execution_engine,
+            variables: std::collections::HashMap::new(),
         }
     }
 
-    pub fn generate(&self, program: Program) -> Result<(), String> {
+    pub fn generate(&mut self, program: Program) -> Result<(), String> {
         let f64_type = self.context.f64_type();
         let fn_type = f64_type.fn_type(&[], false);
         let function = self.module.add_function("main", fn_type, None);
@@ -39,7 +41,7 @@ impl<'ctx> CodeGen<'ctx> {
 
         let mut result = None;
         for stmt in program.statements {
-            result = Some(self.gen_expr(&stmt.expr)?);
+            result = self.gen_statement(&stmt)?;
         }
 
         if let Some(ret_val) = result {
@@ -49,10 +51,28 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(())
     }
 
+    fn gen_statement(&mut self, stmt: &Statement) -> Result<Option<FloatValue<'ctx>>, String> {
+        match stmt {
+            Statement::Expression { expr } => {
+                Ok(Some(self.gen_expr(expr)?))
+            },
+            Statement::VariableDecl { name, value } => {
+                let val = self.gen_expr(value)?;
+                self.variables.insert(name.clone(), val);
+                Ok(None)
+            }
+        }
+    }
+
     fn gen_expr(&self, expr: &Expr) -> Result<FloatValue<'ctx>, String> {
         match expr {
             Expr::Number(n) => {
                 Ok(self.context.f64_type().const_float(*n as f64))
+            }
+            Expr::Identifier(name) => {
+                self.variables.get(name)
+                    .cloned()
+                    .ok_or_else(|| format!("Undefined variable: {}", name))
             }
             Expr::Add(left, right) => {
                 let l = self.gen_expr(left)?;
@@ -96,7 +116,7 @@ impl<'ctx> CodeGen<'ctx> {
 
 pub fn compile(program: Program) -> Result<String, String> {
     let context = Context::create();
-    let codegen = CodeGen::new(&context, "main");
+    let mut codegen = CodeGen::new(&context, "main");
     codegen.generate(program)?;
     Ok(codegen.get_ir())
 }
