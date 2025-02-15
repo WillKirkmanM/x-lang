@@ -15,12 +15,14 @@ pub enum Expr {
         left: Box<Expr>,
         op: Operator,
         right: Box<Expr>,
-    }
+    },
+    Identifier(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Statement {
-    pub expr: Expr
+pub enum Statement {
+    Expression { expr: Expr },
+    VariableDecl { name: String, value: Expr },
 }
 
 #[derive(Debug, Clone, PartialEq)]
