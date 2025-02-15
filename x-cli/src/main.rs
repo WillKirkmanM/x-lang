@@ -3,7 +3,13 @@ use x_parser::parse;
 use x_codegen::CodeGen;
 
 fn main() {
-    let input = "let a = 3;\nlet b = 4;\na + b;";
+    let input = r#"
+import std::print;
+let a = 3;
+let b = 4;
+print("The result of 3 + 4 is:");
+print(a + b);
+"#;
     
     let program = match parse(input) {
         Ok(p) => p,
