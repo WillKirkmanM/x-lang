@@ -16,7 +16,8 @@ members = [
     "x-codegen",
     "x-parser",
     "x-ast",
-    "x-cli"
+    "x-cli", 
+    "x-std"
 ]
 
 [workspace.dependencies]
