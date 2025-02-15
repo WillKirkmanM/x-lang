@@ -3,7 +3,7 @@ use x_parser::parse;
 use x_codegen::CodeGen;
 
 fn main() {
-    let input = "1 + 2 * 3;";
+    let input = "let a = 3;\nlet b = 4;\na + b;";
     
     let program = match parse(input) {
         Ok(p) => p,
@@ -16,7 +16,7 @@ fn main() {
     println!("AST: {:?}", program);
 
     let context = Context::create();
-    let codegen = CodeGen::new(&context, "main");
+    let mut codegen = CodeGen::new(&context, "main");
     
     match codegen.generate(program) {
         Ok(_) => {
