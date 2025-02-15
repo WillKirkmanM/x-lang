@@ -11,6 +11,7 @@ path = "src/lib.rs"
 
 [dependencies]
 x-ast = { path = "../x-ast" }
+x-std = { path = "../x-std" }
 inkwell = { version = "0.5.0", features = ["llvm18-0"] }
 llvm-sys = "180.0.0"
 thiserror = { workspace = true }
