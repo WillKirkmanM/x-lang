@@ -1,4 +1,4 @@
-use x_ast::{Program, Statement, Expr};
+use x_ast::{Expr, Operator, Program, Statement};
 use pest::{Parser, iterators::Pair};
 use pest_derive::Parser;
 
@@ -15,14 +15,35 @@ fn parse_term(pair: Pair<Rule>) -> Expr {
                     let num: i64 = inner.as_str().parse().unwrap();
                     Expr::Number(num)
                 }
+                Rule::string => {
+                    let s = inner.as_str();
+                    let s = &s[1..s.len()-1];
+                    Expr::String(s.to_string())
+                }
                 Rule::identifier => {
                     Expr::Identifier(inner.as_str().to_string())
                 }
-                _ => panic!("Expected number or identifier inside term")
+                Rule::function_call => parse_function_call(inner),
+                _ => panic!("Expected number, string, identifier, or function call inside term")
             }
         }
         _ => panic!("Expected term rule")
     }
+}
+
+fn parse_function_call(pair: Pair<Rule>) -> Expr {
+    let mut inner = pair.into_inner();
+    let name = inner.next().unwrap().as_str().to_string();
+    
+    let args = if let Some(args_pair) = inner.next() {
+        args_pair.into_inner()
+            .map(|arg| parse_expr(arg))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    
+    Expr::FunctionCall { name, args }
 }
 
 fn parse_expr(pair: Pair<Rule>) -> Expr {
@@ -33,15 +54,19 @@ fn parse_expr(pair: Pair<Rule>) -> Expr {
     while let Some(op) = pairs.next() {
         let right = parse_term(pairs.next().unwrap());
         
-        match op.as_rule() {
-            Rule::add => {
-                expr = Expr::Add(Box::new(expr), Box::new(right));
-            }
-            Rule::multiply => {
-                expr = Expr::Multiply(Box::new(expr), Box::new(right));
-            }
+        let operator = match op.as_rule() {
+            Rule::add => Operator::Add,
+            Rule::multiply => Operator::Multiply,
+            Rule::subtract => Operator::Subtract,
+            Rule::divide => Operator::Divide,
             _ => panic!("Unexpected operator")
-        }
+        };
+        
+        expr = Expr::BinaryOp {
+            left: Box::new(expr),
+            op: operator,
+            right: Box::new(right)
+        };
     }
     
     expr
@@ -85,6 +110,12 @@ fn parse_statement(pair: Pair<Rule>) -> Statement {
             let name = inner_rules.next().unwrap().as_str().to_string();
             let expr = parse_expr(inner_rules.next().unwrap());
             Statement::VariableDecl { name, value: expr }
+        },
+        Rule::import => {
+            let mut inner_rules = inner.into_inner();
+            let module = inner_rules.next().unwrap().as_str().to_string();
+            let item = inner_rules.next().unwrap().as_str().to_string();
+            Statement::Import { module, item }
         },
         _ => unreachable!()
     }
