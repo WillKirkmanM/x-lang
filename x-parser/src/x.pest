@@ -2,18 +2,14 @@ WHITESPACE = _{ " " | "\t" | "\n" }
 COMMENT = _{ "//" ~ (!"\n" ~ ANY)* ~ "\n" }
 
 program = { SOI ~ statement* ~ EOI }
-statement = { expr ~ semicolon }
+statement = { (var_decl | expr) ~ semicolon }
 
+var_decl = { "let" ~ identifier ~ "=" ~ expr }
+identifier = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
 expr = { term ~ ((add | multiply) ~ term)* }
-term = { number }
+term = { number | identifier }
 
 number = @{ ASCII_DIGIT+ }
-
-infix_operator = _{ add | subtract }
-high_precedence_operator = _{ multiply | divide }
-
 add = { "+" }
-subtract = { "-" }
 multiply = { "*" }
-divide = { "/" }
 semicolon = { ";" }
