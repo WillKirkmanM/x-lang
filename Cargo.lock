@@ -662,6 +662,7 @@ dependencies = [
  "thiserror 2.0.11",
  "tracing",
  "x-ast",
+ "x-std",
 ]
 
 [[package]]
@@ -678,4 +679,11 @@ dependencies = [
  "pest",
  "pest_derive",
  "x-ast",
+]
+
+[[package]]
+name = "x-std"
+version = "0.1.0"
+dependencies = [
+ "inkwell",
 ]
