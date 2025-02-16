@@ -1,6 +1,8 @@
+use std::collections::HashMap;
+
 use inkwell::{
     context::Context,
-    values::{FloatValue, FunctionValue},
+    values::{FloatValue, FunctionValue, PointerValue},
     builder::Builder, 
     module::Module,
     execution_engine::ExecutionEngine,
@@ -20,6 +22,7 @@ pub struct CodeGen<'ctx> {
     execution_engine: ExecutionEngine<'ctx>,
     variables: std::collections::HashMap<String, FloatValue<'ctx>>,
     stdlib: StdLib<'ctx>,
+    functions: HashMap<String, FunctionValue<'ctx>>,
     imported_functions: std::collections::HashMap<String, FunctionValue<'ctx>>,
 }
 
@@ -41,8 +44,14 @@ impl<'ctx> CodeGen<'ctx> {
             execution_engine,
             variables: std::collections::HashMap::new(),
             stdlib,
+            functions: HashMap::new(),
             imported_functions: std::collections::HashMap::new(),
         }
+    }
+
+    pub fn register_function(&mut self, name: String, function: FunctionValue<'ctx>) {
+        println!("Registering function: {}", name);
+        self.functions.insert(name, function);
     }
 
     pub fn generate(&mut self, program: Program) -> Result<(), String> {
@@ -52,27 +61,31 @@ impl<'ctx> CodeGen<'ctx> {
             }
         }
 
-        let f64_type = self.context.f64_type();
-        let fn_type = f64_type.fn_type(&[], false);
-        let function = self.module.add_function("main", fn_type, None);
-        let basic_block = self.context.append_basic_block(function, "entry");
-        self.builder.position_at_end(basic_block);
-
-        let mut last_value = None;
-        
-        for stmt in program.statements {
-            match stmt {
-                Statement::Import { .. } => continue,
-                _ => last_value = self.gen_statement(&stmt)?,
+        for stmt in &program.statements {
+            if let Statement::Function { name, params, body } = stmt {
+                self.compile_function(name, params, body)?;
             }
         }
 
-        let return_value = last_value.unwrap_or_else(|| {
-            self.context.f64_type().const_float(0.0)
-        });
-        self.builder.build_return(Some(&return_value))
-            .map_err(|e| e.to_string())?;
+        let f64_type = self.context.f64_type();
+        let fn_type = f64_type.fn_type(&[], false);
+        let main_fn = self.module.add_function("main", fn_type, None);
+        let entry_block = self.context.append_basic_block(main_fn, "entry");
+        self.builder.position_at_end(entry_block);
+        let mut last_val = None;
 
+        for stmt in program.statements.iter() {
+            // Skip function definitions since they're already registered.
+            if let Statement::Function { .. } = stmt {
+                continue;
+            }
+            if let Some(val) = self.gen_statement(stmt)? {
+                last_val = Some(val);
+            }
+        }
+
+        let ret_val = last_val.unwrap_or_else(|| f64_type.const_float(0.0));
+        self.builder.build_return(Some(&ret_val)).unwrap();
         Ok(())
     }
 
@@ -88,6 +101,183 @@ impl<'ctx> CodeGen<'ctx> {
 
             let result = main.call();
             Ok(result)
+        }
+    }
+
+    pub fn create_entry_block_alloca(&self, function: FunctionValue<'ctx>, 
+                                   name: &str) -> PointerValue<'ctx> {
+        let builder = self.context.create_builder();
+        let entry = function.get_first_basic_block().unwrap();
+
+        match entry.get_first_instruction() {
+            Some(first_instr) => builder.position_before(&first_instr),
+            None => builder.position_at_end(entry)
+        }
+
+        builder.build_alloca(self.context.f64_type(), name)
+             .unwrap()
+    }
+
+    pub fn compile_function(&mut self, name: &str, 
+                              args: &[String], body: &Statement) -> Result<FunctionValue<'ctx>, String> {
+        let f64_type = self.context.f64_type();
+        let arg_types = vec![f64_type.into(); args.len()];
+        let fn_type = f64_type.fn_type(&arg_types, false);
+        
+        let function = self.module.add_function(name, fn_type, None);
+        
+        let basic_block = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(basic_block);
+        
+        let old_vars = self.variables.clone();
+        for (i, arg) in args.iter().enumerate() {
+            let arg_value = function
+                .get_nth_param(i as u32)
+                .unwrap()
+                .into_float_value();
+            let arg_alloca = self.create_entry_block_alloca(function, arg);
+            self.builder.build_store(arg_alloca, arg_value).unwrap();
+            self.variables.insert(arg.clone(), arg_value);
+        }
+        
+        let return_value = match body {
+            Statement::Expression { expr } => self.compile_expr(expr)?,
+            _ => return Err("Function body must be an expression".to_string())
+        };
+        
+        self.builder.build_return(Some(&return_value))
+            .unwrap();
+        
+        self.variables = old_vars;
+        
+        if function.verify(true) {
+            self.register_function(name.to_string(), function);
+            Ok(function)
+        } else {
+            Err("Invalid generated function.".to_string())
+        }
+    }
+    fn compile_expr(&mut self, expr: &Expr) -> Result<FloatValue<'ctx>, String> {
+        match expr {
+            Expr::Number(n) => {
+                Ok(self.context.f64_type().const_float(*n as f64))
+            },
+            Expr::FunctionCall { name, args } => {
+                println!("Compiling function call: {}", name);
+                self.compile_function_call(name, args)
+            },
+            Expr::String(s) => {
+                Ok(self.context.f64_type().const_float(s.len() as f64))
+            },
+            Expr::Identifier(name) => {
+                match self.variables.get(name) {
+                    Some(var) => Ok(*var),
+                    None => Err(format!("Unknown variable: {}", name))
+                }
+            },
+            Expr::BinaryOp { left, op, right } => {
+                let lhs = self.compile_expr(left)?;
+                let rhs = self.compile_expr(right)?;
+                
+                match op {
+                    Operator::Add => Ok(self.builder
+                        .build_float_add(lhs, rhs, "addtmp")
+                        .map_err(|e| e.to_string())?),
+                        
+                    Operator::Subtract => Ok(self.builder
+                        .build_float_sub(lhs, rhs, "subtmp")
+                        .map_err(|e| e.to_string())?),
+                        
+                    Operator::Multiply => Ok(self.builder
+                        .build_float_mul(lhs, rhs, "multmp")
+                        .map_err(|e| e.to_string())?),
+                        
+                    Operator::Divide => Ok(self.builder
+                        .build_float_div(lhs, rhs, "divtmp")
+                        .map_err(|e| e.to_string())?),
+                        
+                    // Operator::LessThan => {
+                    //     let cmp = self.builder
+                    //         .build_float_compare(
+                    //             inkwell::FloatPredicate::OLT,
+                    //             lhs,
+                    //             rhs,
+                    //             "cmptmp"
+                    //         )
+                    //         .map_err(|e| e.to_string())?;
+                            
+                    //     Ok(self.builder
+                    //         .build_unsigned_int_to_float(
+                    //             cmp,
+                    //             self.context.f64_type(),
+                    //             "booltmp"
+                    //         )
+                    //         .map_err(|e| e.to_string())?)
+                    // },
+                    
+                    // Operator::GreaterThan => {
+                    //     let cmp = self.builder
+                    //         .build_float_compare(
+                    //             inkwell::FloatPredicate::OGT,
+                    //             lhs,
+                    //             rhs,
+                    //             "cmptmp"
+                    //         )
+                    //         .map_err(|e| e.to_string())?;
+                            
+                    //     Ok(self.builder
+                    //         .build_unsigned_int_to_float(
+                    //             cmp,
+                    //             self.context.f64_type(),
+                    //             "booltmp"
+                    //         )
+                    //         .map_err(|e| e.to_string())?)
+                    // },
+                    
+                    // Operator::Equals => {
+                    //     let cmp = self.builder
+                    //         .build_float_compare(
+                    //             inkwell::FloatPredicate::OEQ,
+                    //             lhs,
+                    //             rhs,
+                    //             "cmptmp"
+                    //         )
+                    //         .map_err(|e| e.to_string())?;
+                            
+                    //     Ok(self.builder
+                    //         .build_unsigned_int_to_float(
+                    //             cmp,
+                    //             self.context.f64_type(),
+                    //             "booltmp"
+                    //         )
+                    //         .map_err(|e| e.to_string())?)
+                    // }
+                }
+            }
+        }
+    }
+    fn compile_function_call(&mut self, name: &str, args: &[Expr]) -> Result<FloatValue<'ctx>, String> {
+        println!("Functions in scope: {:?}", self.functions.keys());
+        let f = self.functions.get(name)
+            .copied()
+            .or_else(|| self.module.get_function(name))
+            .or_else(|| self.imported_functions.get(name).copied())
+            .ok_or_else(|| format!("Unknown function {}", name))?;
+    
+        let mut compiled_args = Vec::new();
+        for arg in args {
+            compiled_args.push(self.compile_expr(arg)?.into());
+        }
+    
+        let argslen = f.count_params() as usize;
+        if argslen != args.len() {
+            return Err(format!("Expected {} arguments, got {}", argslen, args.len()));
+        }
+    
+        match self.builder.build_call(f, &compiled_args, "calltmp").unwrap()
+                         .try_as_basic_value().left() {
+            Some(value) => Ok(value.into_float_value()),
+            None => Err("Invalid call produced void value".to_string())
         }
     }
 }
