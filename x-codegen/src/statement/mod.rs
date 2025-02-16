@@ -17,6 +17,10 @@ impl<'ctx> CodeGen<'ctx> {
                 self.process_import(module, item)?;
                 Ok(None)
             },
+            Statement::Function { name, params, body } => {
+                self.compile_function(name, params, body)?;
+                Ok(None)
+            },
         }
     }
 }
