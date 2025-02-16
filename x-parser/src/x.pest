@@ -2,7 +2,11 @@ WHITESPACE = _{ " " | "\t" | "\n" | "\r" }
 COMMENT = _{ "//" ~ (!"\n" ~ ANY)* ~ "\n" }
 
 program = { SOI ~ statement* ~ EOI }
-statement = { (var_decl | import | expr) ~ ";" }
+statement = { function_def | (var_decl | import | expr) ~ ";" }
+
+function_def = { "fn" ~ identifier ~ "(" ~ params? ~ ")" ~ block }
+params = { identifier ~ ("," ~ identifier)* }
+block = { "{" ~ statement* ~ "}" }
 
 import = { "import" ~ module ~ "::" ~ item }
 module = { identifier }
@@ -10,7 +14,8 @@ item = { identifier }
 
 var_decl = { "let" ~ identifier ~ "=" ~ expr }
 
-expr = { term ~ ((add | subtract | multiply | divide) ~ term)* }
+expr = { term ~ ((operator ~ term)*)? }
+operator = _{ add | subtract | multiply | divide }
 
 term = { function_call | number | string | identifier }
 
@@ -18,7 +23,6 @@ function_call = { identifier ~ "(" ~ args? ~ ")" }
 args = { expr ~ ("," ~ expr)* }
 
 string = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
-
 identifier = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
 number = @{ ASCII_DIGIT+ }
 
