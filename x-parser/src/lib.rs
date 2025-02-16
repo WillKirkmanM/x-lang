@@ -117,6 +117,42 @@ fn parse_statement(pair: Pair<Rule>) -> Statement {
             let item = inner_rules.next().unwrap().as_str().to_string();
             Statement::Import { module, item }
         },
+        Rule::function_def => parse_function_def(inner),
         _ => unreachable!()
+    }
+}
+
+fn parse_function_def(pair: Pair<Rule>) -> Statement {
+    let mut inner = pair.into_inner();
+    let name = inner.next().unwrap().as_str().to_string();
+    
+    let params = if let Some(params_pair) = inner.next() {
+        params_pair.into_inner()
+            .map(|param| param.as_str().to_string())
+            .collect()
+    } else {
+        Vec::new()
+    };
+    
+    let body = parse_block(inner.next().unwrap());
+    
+    Statement::Function {
+        name,
+        params,
+        body: Box::new(body)
+    }
+}
+
+fn parse_block(pair: Pair<Rule>) -> Statement {
+    let statements: Vec<Statement> = pair.into_inner()
+        .map(parse_statement)
+        .collect();
+    
+    if let Some(last_stmt) = statements.last() {
+        last_stmt.clone()
+    } else {
+        Statement::Expression { 
+            expr: Expr::Number(0) 
+        }
     }
 }
