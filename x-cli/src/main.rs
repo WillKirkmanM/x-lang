@@ -4,13 +4,24 @@ use x_codegen::CodeGen;
 
 fn main() {
     let input = r#"
-import std::print;
-let a = 3;
-let b = 4;
-print("The result of 3 + 4 is:");
-print(a + b);
-"#;
+    import std::print;
     
+    fn add(x, y) {
+        x + y;
+    }
+    
+    fn multiply(x, y) {
+        x * y;
+    }
+
+    let result1 = add(3, 4);
+    print("The result of 3 + 4 is:");
+    print(result1);
+
+    let result2 = multiply(3, 4);
+    print("The result of 3 * 4 is:");
+    print(result2);
+    "#;
     let program = match parse(input) {
         Ok(p) => p,
         Err(e) => {
