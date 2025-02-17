@@ -4,6 +4,12 @@ pub enum Operator {
     Subtract,
     Multiply,
     Divide,
+    LessThan,
+    GreaterThan,
+    LessThanOrEqual,
+    GreaterThanOrEqual,
+    Equal,
+    NotEqual,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -35,6 +41,11 @@ pub enum Statement {
         start: Box<Expr>,
         end: Box<Expr>,
         body: Vec<Statement>
+    },
+    If {
+        condition: Box<Expr>,
+        then_block: Vec<Statement>,
+        else_block: Option<Vec<Statement>>,
     },
 }
 
