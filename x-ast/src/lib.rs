@@ -27,7 +27,7 @@ pub enum Statement {
     Expression { expr: Expr },
     VariableDecl { name: String, value: Expr },
     Import { module: String, item: String },
-    Function { name: String, params: Vec<String>, body: Box<Statement> },
+    Function { name: String, params: Vec<String>, body: Box<Vec<Statement>> },
     Block { statements: Vec<Statement> },
 }
 
