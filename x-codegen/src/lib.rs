@@ -1,20 +1,20 @@
 use std::collections::HashMap;
 
 use inkwell::{
+    builder::Builder,
     context::Context,
-    values::{FloatValue, FunctionValue, PointerValue},
-    builder::Builder, 
-    module::Module,
     execution_engine::ExecutionEngine,
+    module::Module,
+    values::{FloatValue, FunctionValue, PointerValue},
     OptimizationLevel,
 };
 use x_ast::{Expr, Operator, Program, Statement};
 use x_std::StdLib;
 
-pub mod statement;
 pub mod expression;
-pub mod import;
 pub mod function;
+pub mod import;
+pub mod statement;
 
 pub struct CodeGen<'ctx> {
     context: &'ctx Context,
@@ -31,13 +31,14 @@ impl<'ctx> CodeGen<'ctx> {
     pub fn new(context: &'ctx Context, module_name: &str) -> Self {
         let module = context.create_module(module_name);
         let builder = context.create_builder();
-        
+
         let stdlib = StdLib::new(context);
         stdlib.link_to_module(&module);
-        
-        let execution_engine = module.create_jit_execution_engine(OptimizationLevel::None)
+
+        let execution_engine = module
+            .create_jit_execution_engine(OptimizationLevel::None)
             .expect("Failed to create execution engine");
-            
+
         CodeGen {
             context,
             module,
@@ -96,7 +97,8 @@ impl<'ctx> CodeGen<'ctx> {
 
     pub fn jit_execute(&self) -> Result<f64, String> {
         unsafe {
-            let main = self.execution_engine
+            let main = self
+                .execution_engine
                 .get_function::<unsafe extern "C" fn() -> f64>("main")
                 .map_err(|e| format!("Failed to get main function: {}", e))?;
 
@@ -105,52 +107,54 @@ impl<'ctx> CodeGen<'ctx> {
         }
     }
 
-    pub fn create_entry_block_alloca(&self, function: FunctionValue<'ctx>, 
-                                   name: &str) -> PointerValue<'ctx> {
+    pub fn create_entry_block_alloca(
+        &self,
+        function: FunctionValue<'ctx>,
+        name: &str,
+    ) -> PointerValue<'ctx> {
         let builder = self.context.create_builder();
         let entry = function.get_first_basic_block().unwrap();
 
         match entry.get_first_instruction() {
             Some(first_instr) => builder.position_before(&first_instr),
-            None => builder.position_at_end(entry)
+            None => builder.position_at_end(entry),
         }
 
-        builder.build_alloca(self.context.f64_type(), name)
-             .unwrap()
+        builder.build_alloca(self.context.f64_type(), name).unwrap()
     }
 
-    pub fn compile_function(&mut self, name: &str, 
-                              args: &[String], body: &Statement) -> Result<FunctionValue<'ctx>, String> {
+    pub fn compile_function(
+        &mut self,
+        name: &str,
+        args: &[String],
+        body: &Statement,
+    ) -> Result<FunctionValue<'ctx>, String> {
         let f64_type = self.context.f64_type();
         let arg_types = vec![f64_type.into(); args.len()];
         let fn_type = f64_type.fn_type(&arg_types, false);
-        
+
         let function = self.module.add_function(name, fn_type, None);
-        
+
         let basic_block = self.context.append_basic_block(function, "entry");
         self.builder.position_at_end(basic_block);
-        
+
         let old_vars = self.variables.clone();
         for (i, arg) in args.iter().enumerate() {
-            let arg_value = function
-                .get_nth_param(i as u32)
-                .unwrap()
-                .into_float_value();
+            let arg_value = function.get_nth_param(i as u32).unwrap().into_float_value();
             let arg_alloca = self.create_entry_block_alloca(function, arg);
             self.builder.build_store(arg_alloca, arg_value).unwrap();
             self.variables.insert(arg.clone(), arg_value);
         }
-        
+
         let return_value = match body {
             Statement::Expression { expr } => self.compile_expr(expr)?,
-            _ => return Err("Function body must be an expression".to_string())
+            _ => return Err("Function body must be an expression".to_string()),
         };
-        
-        self.builder.build_return(Some(&return_value))
-            .unwrap();
-        
+
+        self.builder.build_return(Some(&return_value)).unwrap();
+
         self.variables = old_vars;
-        
+
         if function.verify(true) {
             self.register_function(name.to_string(), function);
             Ok(function)
@@ -160,43 +164,71 @@ impl<'ctx> CodeGen<'ctx> {
     }
     fn compile_expr(&mut self, expr: &Expr) -> Result<FloatValue<'ctx>, String> {
         match expr {
-            Expr::Number(n) => {
-                Ok(self.context.f64_type().const_float(*n as f64))
-            },
+            Expr::Number(n) => Ok(self.context.f64_type().const_float(*n as f64)),
             Expr::FunctionCall { name, args } => {
                 println!("Compiling function call: {}", name);
-                self.compile_function_call(name, args)
-            },
-            Expr::String(s) => {
-                Ok(self.context.f64_type().const_float(s.len() as f64))
-            },
-            Expr::Identifier(name) => {
-                match self.variables.get(name) {
-                    Some(var) => Ok(*var),
-                    None => Err(format!("Unknown variable: {}", name))
+                if name == "print" {
+                    if let Some(Expr::String(s)) = args.first() {
+                        let printf = self
+                            .module
+                            .get_function("printf")
+                            .ok_or_else(|| "printf function not found".to_string())?;
+
+                        let fmt_str = self
+                            .builder
+                            .build_global_string_ptr("%s\n", "fmt")
+                            .map_err(|e| e.to_string())?;
+
+                        let str_ptr = self
+                            .builder
+                            .build_global_string_ptr(s, "str")
+                            .map_err(|e| e.to_string())?;
+
+                        self.builder
+                            .build_call(
+                                printf,
+                                &[
+                                    fmt_str.as_pointer_value().into(),
+                                    str_ptr.as_pointer_value().into(),
+                                ],
+                                "printf_call",
+                            )
+                            .map_err(|e| e.to_string())?;
+
+                        return Ok(self.context.f64_type().const_float(0.0));
+                    }
                 }
+                self.compile_function_call(name, args)
+            }
+            Expr::String(s) => Ok(self.context.f64_type().const_float(s.len() as f64)),
+            Expr::Identifier(name) => match self.variables.get(name) {
+                Some(var) => Ok(*var),
+                None => Err(format!("Unknown variable: {}", name)),
             },
             Expr::BinaryOp { left, op, right } => {
                 let lhs = self.compile_expr(left)?;
                 let rhs = self.compile_expr(right)?;
-                
+
                 match op {
-                    Operator::Add => Ok(self.builder
+                    Operator::Add => Ok(self
+                        .builder
                         .build_float_add(lhs, rhs, "addtmp")
                         .map_err(|e| e.to_string())?),
-                        
-                    Operator::Subtract => Ok(self.builder
+
+                    Operator::Subtract => Ok(self
+                        .builder
                         .build_float_sub(lhs, rhs, "subtmp")
                         .map_err(|e| e.to_string())?),
-                        
-                    Operator::Multiply => Ok(self.builder
+
+                    Operator::Multiply => Ok(self
+                        .builder
                         .build_float_mul(lhs, rhs, "multmp")
                         .map_err(|e| e.to_string())?),
-                        
-                    Operator::Divide => Ok(self.builder
+
+                    Operator::Divide => Ok(self
+                        .builder
                         .build_float_div(lhs, rhs, "divtmp")
                         .map_err(|e| e.to_string())?),
-                        
                     // Operator::LessThan => {
                     //     let cmp = self.builder
                     //         .build_float_compare(
@@ -206,7 +238,7 @@ impl<'ctx> CodeGen<'ctx> {
                     //             "cmptmp"
                     //         )
                     //         .map_err(|e| e.to_string())?;
-                            
+
                     //     Ok(self.builder
                     //         .build_unsigned_int_to_float(
                     //             cmp,
@@ -215,7 +247,7 @@ impl<'ctx> CodeGen<'ctx> {
                     //         )
                     //         .map_err(|e| e.to_string())?)
                     // },
-                    
+
                     // Operator::GreaterThan => {
                     //     let cmp = self.builder
                     //         .build_float_compare(
@@ -225,7 +257,7 @@ impl<'ctx> CodeGen<'ctx> {
                     //             "cmptmp"
                     //         )
                     //         .map_err(|e| e.to_string())?;
-                            
+
                     //     Ok(self.builder
                     //         .build_unsigned_int_to_float(
                     //             cmp,
@@ -234,7 +266,7 @@ impl<'ctx> CodeGen<'ctx> {
                     //         )
                     //         .map_err(|e| e.to_string())?)
                     // },
-                    
+
                     // Operator::Equals => {
                     //     let cmp = self.builder
                     //         .build_float_compare(
@@ -244,7 +276,7 @@ impl<'ctx> CodeGen<'ctx> {
                     //             "cmptmp"
                     //         )
                     //         .map_err(|e| e.to_string())?;
-                            
+
                     //     Ok(self.builder
                     //         .build_unsigned_int_to_float(
                     //             cmp,
@@ -257,28 +289,43 @@ impl<'ctx> CodeGen<'ctx> {
             }
         }
     }
-    fn compile_function_call(&mut self, name: &str, args: &[Expr]) -> Result<FloatValue<'ctx>, String> {
+    fn compile_function_call(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+    ) -> Result<FloatValue<'ctx>, String> {
         println!("Functions in scope: {:?}", self.functions.keys());
-        let f = self.functions.get(name)
+        let f = self
+            .functions
+            .get(name)
             .copied()
             .or_else(|| self.module.get_function(name))
             .or_else(|| self.imported_functions.get(name).copied())
             .ok_or_else(|| format!("Unknown function {}", name))?;
-    
+
         let mut compiled_args = Vec::new();
         for arg in args {
             compiled_args.push(self.compile_expr(arg)?.into());
         }
-    
+
         let argslen = f.count_params() as usize;
         if argslen != args.len() {
-            return Err(format!("Expected {} arguments, got {}", argslen, args.len()));
+            return Err(format!(
+                "Expected {} arguments, got {}",
+                argslen,
+                args.len()
+            ));
         }
-    
-        match self.builder.build_call(f, &compiled_args, "calltmp").unwrap()
-                         .try_as_basic_value().left() {
+
+        match self
+            .builder
+            .build_call(f, &compiled_args, "calltmp")
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+        {
             Some(value) => Ok(value.into_float_value()),
-            None => Err("Invalid call produced void value".to_string())
+            None => Err("Invalid call produced void value".to_string()),
         }
     }
 }
