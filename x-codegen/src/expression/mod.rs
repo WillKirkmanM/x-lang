@@ -3,7 +3,7 @@ use inkwell::{module::Linkage, values::{FloatValue, FunctionValue, BasicMetadata
 use x_ast::{Expr, Operator, StringLiteral, StringPart};
 
 impl<'ctx> CodeGen<'ctx> {
-    pub(crate) fn gen_expr(&self, expr: &Expr) -> Result<BasicValueEnum<'ctx>, String> {
+    pub(crate) fn gen_expr(&mut self, expr: &Expr) -> Result<BasicValueEnum<'ctx>, String> {
         match expr {
             Expr::Number(n) => Ok(self.context.f64_type().const_float(*n as f64).into()),
             Expr::Identifier(name) => {
@@ -20,28 +20,24 @@ impl<'ctx> CodeGen<'ctx> {
                 let lhs = self.gen_expr(left)?.into_float_value();
                 let rhs = self.gen_expr(right)?.into_float_value();
                 
-                match op {
-                    Operator::Add => Ok(self.builder
-                        .build_float_add(lhs, rhs, "addtmp")
-                        .map_err(|e| e.to_string())?
-                        .into()),
-                    Operator::Subtract => Ok(self.builder.build_float_sub(lhs, rhs, "subtmp") 
-                        .map_err(|e| e.to_string())?
-                        .into()),
-                    Operator::Multiply => Ok(self.builder
-                        .build_float_mul(lhs, rhs, "multmp")
-                        .map_err(|e| e.to_string())?
-                        .into()),
-                    Operator::Divide => Ok(self.builder.build_float_div(lhs, rhs, "divtmp")
-                        .map_err(|e| e.to_string())?
-                        .into()),
-                    Operator::LessThan => self.gen_comparison(FloatPredicate::OLT, lhs, rhs).map(|v| v.into()),
-                    Operator::GreaterThan => self.gen_comparison(FloatPredicate::OGT, lhs, rhs).map(|v| v.into()),
-                    Operator::LessThanOrEqual => self.gen_comparison(FloatPredicate::OLE, lhs, rhs).map(|v| v.into()),
-                    Operator::GreaterThanOrEqual => self.gen_comparison(FloatPredicate::OGE, lhs, rhs).map(|v| v.into()),
-                    Operator::Equal => self.gen_comparison(FloatPredicate::OEQ, lhs, rhs).map(|v| v.into()),
-                    Operator::NotEqual => self.gen_comparison(FloatPredicate::ONE, lhs, rhs).map(|v| v.into()),
-                }
+                let result = match op {
+                    Operator::Add => self.builder.build_float_add(lhs, rhs, "addtmp")
+                        .map_err(|e| e.to_string()),
+                    Operator::Subtract => self.builder.build_float_sub(lhs, rhs, "subtmp")
+                        .map_err(|e| e.to_string()),
+                    Operator::Multiply => self.builder.build_float_mul(lhs, rhs, "multmp")
+                        .map_err(|e| e.to_string()),
+                    Operator::Divide => self.builder.build_float_div(lhs, rhs, "divtmp")
+                        .map_err(|e| e.to_string()),
+                    Operator::LessThan => self.gen_comparison(FloatPredicate::OLT, lhs, rhs),
+                    Operator::GreaterThan => self.gen_comparison(FloatPredicate::OGT, lhs, rhs),
+                    Operator::LessThanOrEqual => self.gen_comparison(FloatPredicate::OLE, lhs, rhs),
+                    Operator::GreaterThanOrEqual => self.gen_comparison(FloatPredicate::OGE, lhs, rhs),
+                    Operator::Equal => self.gen_comparison(FloatPredicate::OEQ, lhs, rhs),
+                    Operator::NotEqual => self.gen_comparison(FloatPredicate::ONE, lhs, rhs),
+                }?;
+                
+                Ok(result.into())
             },
             Expr::FunctionCall { name, args } => {
                 match name.as_str() {
@@ -61,6 +57,18 @@ impl<'ctx> CodeGen<'ctx> {
                     .build_global_string_ptr(&s, "str_const")
                     .map_err(|e| e.to_string())?;
                 Ok(global_str.as_pointer_value().into())
+            },
+            Expr::AnonymousFunction { params, body } => {
+                let function = self.compile_anonymous_function(params, body)?;
+                let fn_ptr = self.builder.build_alloca(
+                    self.context.ptr_type(AddressSpace::default()),
+                    "anonymous_fn"
+                ).map_err(|e| e.to_string())?;
+                
+                self.builder.build_store(fn_ptr, function.as_global_value().as_pointer_value())
+                    .map_err(|e| e.to_string())?;
+                
+                Ok(fn_ptr.into())
             },
         }
     }
@@ -98,7 +106,7 @@ impl<'ctx> CodeGen<'ctx> {
         }
     }
 
-    pub fn gen_print_str(&self, string: &StringLiteral) -> Result<FloatValue<'ctx>, String> {
+    pub fn gen_print_str(&mut self, string: &StringLiteral) -> Result<FloatValue<'ctx>, String> {
         let printf = self.get_printf_fn()?;
         let mut fmt_str = String::new();
         let mut args: Vec<BasicValueEnum<'ctx>> = Vec::new();
@@ -168,8 +176,8 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(self.context.f64_type().const_float(0.0))
     }
 
-    pub fn gen_print(&self, args: &[Expr]) -> Result<FloatValue<'ctx>, String> {
-        if let Some(print_fn) = self.imported_functions.get("print") {
+    pub fn gen_print(&mut self, args: &[Expr]) -> Result<FloatValue<'ctx>, String> {
+        if let Some(&print_fn) = self.imported_functions.get("print") {
             let compiled_args: Vec<_> = args.iter()
                 .map(|arg| self.gen_expr(arg))
                 .collect::<Result<Vec<_>, _>>()?
@@ -178,7 +186,7 @@ impl<'ctx> CodeGen<'ctx> {
                 .collect();
 
             Ok(self.builder.build_call(
-                *print_fn,
+                print_fn,
                 &compiled_args,
                 "calltmp"
             ).map_err(|e| e.to_string())?
