@@ -24,10 +24,9 @@ args = { expr ~ ("," ~ expr)* }
 operator = @{ "<=" | ">=" | "==" | "!=" | "<" | ">" | "+" | "-" | "*" | "/" }
 number = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
 identifier = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
-string = ${ "\"" ~ inner_str ~ "\"" }
-inner_str = @{ char* }
-char = {
-    !("\"" | "\\") ~ ANY
-    | "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t")
-    | "\\" ~ ("u" ~ ASCII_HEX_DIGIT{4})
+string = { "\"" ~ inner_str ~ "\"" }
+inner_str = { (interpolation | string_char)* }
+interpolation = { "{" ~ identifier ~ "}" }
+string_char = @{
+    !("{" | "\"") ~ ANY
 }
