@@ -156,11 +156,9 @@ fn parse_block(pair: Pair<Rule>) -> Statement {
         .map(parse_statement)
         .collect();
     
-    if let Some(last_stmt) = statements.last() {
-        last_stmt.clone()
+    if statements.len() == 1 {
+        statements[0].clone()
     } else {
-        Statement::Expression { 
-            expr: Expr::Number(0) 
-        }
+        Statement::Block { statements }
     }
 }
