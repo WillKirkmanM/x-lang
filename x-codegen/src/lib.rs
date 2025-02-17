@@ -15,6 +15,7 @@ pub mod expression;
 pub mod function;
 pub mod import;
 pub mod statement;
+pub mod for_loop;
 
 pub struct CodeGen<'ctx> {
     context: &'ctx Context,
