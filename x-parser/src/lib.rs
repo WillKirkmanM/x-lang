@@ -10,24 +10,18 @@ fn parse_term(pair: Pair<Rule>) -> Expr {
     match pair.as_rule() {
         Rule::term => {
             let inner = pair.into_inner().next().unwrap();
-            match inner.as_rule() {
-                Rule::number => {
-                    let num: i64 = inner.as_str().parse().unwrap();
-                    Expr::Number(num)
-                }
-                Rule::string => {
-                    let s = inner.as_str();
-                    let s = &s[1..s.len()-1];
-                    Expr::String(s.to_string())
-                }
-                Rule::identifier => {
-                    Expr::Identifier(inner.as_str().to_string())
-                }
-                Rule::function_call => parse_function_call(inner),
-                _ => panic!("Expected number, string, identifier, or function call inside term")
-            }
-        }
-        _ => panic!("Expected term rule")
+            parse_term(inner)
+        },
+        Rule::function_call => parse_function_call(pair),
+        Rule::identifier => Expr::Identifier(pair.as_str().to_string()),
+        Rule::number => Expr::Number(pair.as_str().parse().unwrap()),
+        Rule::string => {
+            let s = pair.as_str();
+            let s = &s[1..s.len()-1]; // Remove quotes
+            Expr::String(s.to_string())
+        },
+        Rule::expr => parse_expr(pair),
+        _ => unreachable!("Unexpected rule in term: {:?}", pair.as_rule()),
     }
 }
 
@@ -47,29 +41,42 @@ fn parse_function_call(pair: Pair<Rule>) -> Expr {
 }
 
 fn parse_expr(pair: Pair<Rule>) -> Expr {
-    let mut pairs = pair.into_inner().peekable();
-    
-    let mut expr = parse_term(pairs.next().unwrap());
-    
-    while let Some(op) = pairs.next() {
-        let right = parse_term(pairs.next().unwrap());
-        
-        let operator = match op.as_rule() {
-            Rule::add => Operator::Add,
-            Rule::multiply => Operator::Multiply,
-            Rule::subtract => Operator::Subtract,
-            Rule::divide => Operator::Divide,
-            _ => panic!("Unexpected operator")
-        };
-        
-        expr = Expr::BinaryOp {
-            left: Box::new(expr),
-            op: operator,
-            right: Box::new(right)
-        };
+    match pair.as_rule() {
+        Rule::expr => {
+            let mut pairs = pair.into_inner().peekable();
+            let mut left = parse_term(pairs.next().unwrap());
+
+            while let Some(op_pair) = pairs.next() {
+                let op = parse_operator(op_pair.as_str());
+                if let Some(right_pair) = pairs.next() {
+                    let right = parse_term(right_pair);
+                    left = Expr::BinaryOp {
+                        left: Box::new(left),
+                        op,
+                        right: Box::new(right),
+                    };
+                }
+            }
+            left
+        },
+        _ => parse_term(pair),
     }
-    
-    expr
+}
+
+fn parse_operator(op: &str) -> Operator {
+    match op {
+        "+" => Operator::Add,
+        "-" => Operator::Subtract,
+        "*" => Operator::Multiply,
+        "/" => Operator::Divide,
+        "<" => Operator::LessThan,
+        ">" => Operator::GreaterThan,
+        "<=" => Operator::LessThanOrEqual,
+        ">=" => Operator::GreaterThanOrEqual,
+        "==" => Operator::Equal,
+        "!=" => Operator::NotEqual,
+        _ => unreachable!("Unknown operator: {}", op),
+    }
 }
 
 pub fn parse(input: &str) -> Result<Program, String> {
@@ -104,6 +111,24 @@ fn parse_statement(pair: Pair<Rule>) -> Statement {
         Rule::statement => {
             let inner = pair.into_inner().next().unwrap();
             match inner.as_rule() {
+                Rule::if_stmt => {
+                    let mut inner_if = inner.into_inner();
+                    let condition = Box::new(parse_expr(inner_if.next().unwrap()));
+                    let then_block = inner_if.next().unwrap().into_inner()
+                        .map(parse_statement)
+                        .collect();
+                    let else_block = inner_if.next().map(|else_pair| {
+                        else_pair.into_inner()
+                            .map(parse_statement)
+                            .collect()
+                    });
+                    
+                    Statement::If {
+                        condition,
+                        then_block,
+                        else_block
+                    }
+                },
                 Rule::for_loop => {
                     let mut inner_loop = inner.into_inner();
                     let var = inner_loop.next().unwrap().as_str().to_string();
