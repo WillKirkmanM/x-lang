@@ -29,6 +29,7 @@ pub enum Statement {
     Import { module: String, item: String },
     Function { name: String, params: Vec<String>, body: Box<Vec<Statement>> },
     Block { statements: Vec<Statement> },
+    Comment(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
