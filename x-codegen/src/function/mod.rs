@@ -1,5 +1,5 @@
-use inkwell::values::FloatValue;
-use x_ast::Expr;
+use inkwell::values::{FloatValue, FunctionValue};
+use x_ast::{Expr, Statement};
 use inkwell::values::BasicValueEnum;
 
 use crate::CodeGen;
@@ -48,6 +48,54 @@ impl<'ctx> CodeGen<'ctx> {
                     }
                 }
             }
+        }
+    }
+
+    pub fn compile_function(
+        &mut self,
+        name: &str,
+        args: &[String],
+        body: &Statement,
+    ) -> Result<FunctionValue<'ctx>, String> {
+        let f64_type = self.context.f64_type();
+        let arg_types = vec![f64_type.into(); args.len()];
+        let fn_type = f64_type.fn_type(&arg_types, false);
+    
+        let function = self.module.add_function(name, fn_type, None);
+        let basic_block = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(basic_block);
+    
+        let old_vars = self.variables.clone();
+        for (i, arg) in args.iter().enumerate() {
+            let arg_value = function.get_nth_param(i as u32).unwrap().into_float_value();
+            let arg_alloca = self.create_entry_block_alloca(function, arg);
+            self.builder.build_store(arg_alloca, arg_value).unwrap();
+            self.variables.insert(arg.clone(), arg_value);
+        }
+    
+        // Handle both expressions and blocks
+        let return_value = match body {
+            Statement::Expression { expr } => self.gen_expr(expr)?,
+            Statement::Block { statements } => {
+                let mut last_value = self.context.f64_type().const_float(0.0);
+                for stmt in statements {
+                    if let Some(val) = self.gen_statement(stmt)? {
+                        last_value = val;
+                    }
+                }
+                last_value
+            }
+            _ => return Err("Function body must be an expression or block".to_string()),
+        };
+    
+        self.builder.build_return(Some(&return_value)).unwrap();
+        self.variables = old_vars;
+    
+        if function.verify(true) {
+            self.register_function(name.to_string(), function);
+            Ok(function)
+        } else {
+            Err("Invalid generated function.".to_string())
         }
     }
 
