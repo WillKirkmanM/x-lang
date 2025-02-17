@@ -1,5 +1,5 @@
-WHITESPACE = _{ " " | "\t" | "\n" | "\r" }
-COMMENT = _{ "//" ~ (!"\n" ~ ANY)* ~ "\n" }
+COMMENT = _{ "//" ~ (!NEWLINE ~ ANY)* ~ NEWLINE }
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" | COMMENT }
 
 program = { SOI ~ statement* ~ EOI }
 statement = { function_def | (var_decl | import | expr) ~ ";" }
