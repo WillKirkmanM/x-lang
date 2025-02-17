@@ -45,6 +45,9 @@ impl<'ctx> CodeGen<'ctx> {
             Statement::ForLoop { var, start, end, body } => {
                 self.gen_for_loop(var, start, end, body)
             },
+            Statement::If { condition, then_block, else_block } => {
+                self.gen_if(condition, then_block, else_block)
+            },
         }
     }
 }
