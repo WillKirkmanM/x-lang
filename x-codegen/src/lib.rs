@@ -21,10 +21,10 @@ pub struct CodeGen<'ctx> {
     module: Module<'ctx>,
     builder: Builder<'ctx>,
     execution_engine: ExecutionEngine<'ctx>,
-    variables: std::collections::HashMap<String, FloatValue<'ctx>>,
+    variables: HashMap<String, PointerValue<'ctx>>,
     stdlib: StdLib<'ctx>,
     functions: HashMap<String, FunctionValue<'ctx>>,
-    imported_functions: std::collections::HashMap<String, FunctionValue<'ctx>>,
+    imported_functions: HashMap<String, FunctionValue<'ctx>>,
 }
 
 impl<'ctx> CodeGen<'ctx> {
@@ -163,10 +163,15 @@ impl<'ctx> CodeGen<'ctx> {
                 self.compile_function_call(name, args)
             }
             Expr::String(s) => Ok(self.context.f64_type().const_float(s.len() as f64)),
-            Expr::Identifier(name) => match self.variables.get(name) {
-                Some(var) => Ok(*var),
+        Expr::Identifier(name) => {
+            match self.variables.get(name) {
+                Some(ptr) => Ok(self.builder
+                    .build_load(self.context.f64_type(), *ptr, name)
+                    .map_err(|e| e.to_string())?
+                    .into_float_value()),
                 None => Err(format!("Unknown variable: {}", name)),
-            },
+            }
+        },
             Expr::BinaryOp { left, op, right } => {
                 let lhs = self.compile_expr(left)?;
                 let rhs = self.compile_expr(right)?;
