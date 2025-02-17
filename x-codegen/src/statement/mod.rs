@@ -42,6 +42,9 @@ impl<'ctx> CodeGen<'ctx> {
                 Ok(last_value)
             }
             Statement::Comment(_) => Ok(None),
+            Statement::ForLoop { var, start, end, body } => {
+                self.gen_for_loop(var, start, end, body)
+            },
         }
     }
 }
