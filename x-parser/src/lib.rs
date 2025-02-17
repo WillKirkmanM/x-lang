@@ -17,8 +17,29 @@ fn parse_term(pair: Pair<Rule>) -> Expr {
         Rule::number => Expr::Number(pair.as_str().parse().unwrap()),
         Rule::string => parse_string(pair),
         Rule::expr => parse_expr(pair),
+        Rule::anonymous_fn => parse_anonymous_fn(pair),
         _ => unreachable!("Unexpected rule in term: {:?}", pair.as_rule()),
     }
+}
+
+fn parse_anonymous_fn(pair: Pair<Rule>) -> Expr {
+    let mut inner = pair.into_inner();
+    
+    let params = if let Some(params_pair) = inner.next().filter(|p| p.as_rule() == Rule::params) {
+        params_pair.into_inner()
+            .map(|param| param.as_str().to_string())
+            .collect()
+    } else {
+        Vec::new()
+    };
+    
+    let body_pair = inner.next().unwrap();
+    let body = match parse_block(body_pair) {
+        Statement::Block { statements } => statements,
+        single_statement => vec![single_statement],
+    };
+    
+    Expr::AnonymousFunction { params, body }
 }
 
 fn parse_function_call(pair: Pair<Rule>) -> Expr {
@@ -136,6 +157,9 @@ fn parse_statement(pair: Pair<Rule>) -> Statement {
                     
                     Statement::ForLoop { var, start, end, body }
                 },
+                Rule::block_expr => Statement::Expression {
+                    expr: parse_expr(inner)
+                },
                 Rule::expr => Statement::Expression {
                     expr: parse_expr(inner)
                 },
@@ -155,6 +179,9 @@ fn parse_statement(pair: Pair<Rule>) -> Statement {
                 Rule::COMMENT => Statement::Comment(inner.as_str().trim_start_matches("//").trim().to_string()),
                 _ => unreachable!("Unexpected rule in statement: {:?}", inner.as_rule())
             }
+        },
+        Rule::block_expr => Statement::Expression {
+            expr: parse_expr(pair.into_inner().next().unwrap())
         },
         Rule::EOI => panic!("EOI should be handled in parse_program"),
         _ => unreachable!("Unexpected top-level rule: {:?}", pair.as_rule())
@@ -196,15 +223,24 @@ fn parse_function_def(pair: Pair<Rule>) -> Statement {
 }
 
 fn parse_block(pair: Pair<Rule>) -> Statement {
-    let statements: Vec<Statement> = pair.into_inner()
-        .map(parse_statement)
-        .collect();
+    let mut statements = Vec::new();
+    let mut final_expr = None;
     
-    if statements.len() == 1 {
-        statements[0].clone()
-    } else {
-        Statement::Block { statements }
+    for pair in pair.into_inner() {
+        match pair.as_rule() {
+            Rule::statement => statements.push(parse_statement(pair)),
+            Rule::block_expr => {
+                final_expr = Some(parse_expr(pair.into_inner().next().unwrap()));
+            },
+            _ => unreachable!("Unexpected rule in block: {:?}", pair.as_rule())
+        }
     }
+    
+    if let Some(expr) = final_expr {
+        statements.push(Statement::Expression { expr });
+    }
+    
+    Statement::Block { statements }
 }
 
 fn parse_string(pair: Pair<Rule>) -> Expr {
