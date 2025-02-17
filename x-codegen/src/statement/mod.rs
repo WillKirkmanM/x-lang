@@ -8,7 +8,7 @@ impl<'ctx> CodeGen<'ctx> {
         stmt: &Statement,
     ) -> Result<Option<FloatValue<'ctx>>, String> {
         match stmt {
-            Statement::Expression { expr } => Ok(Some(self.gen_expr(expr)?)),
+            Statement::Expression { expr } => Ok(Some(self.gen_expr(expr)?.into_float_value())),
             Statement::VariableDecl { name, value } => {
                 let alloca = self
                     .builder
