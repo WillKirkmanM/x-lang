@@ -123,45 +123,7 @@ impl<'ctx> CodeGen<'ctx> {
         builder.build_alloca(self.context.f64_type(), name).unwrap()
     }
 
-    pub fn compile_function(
-        &mut self,
-        name: &str,
-        args: &[String],
-        body: &Statement,
-    ) -> Result<FunctionValue<'ctx>, String> {
-        let f64_type = self.context.f64_type();
-        let arg_types = vec![f64_type.into(); args.len()];
-        let fn_type = f64_type.fn_type(&arg_types, false);
 
-        let function = self.module.add_function(name, fn_type, None);
-
-        let basic_block = self.context.append_basic_block(function, "entry");
-        self.builder.position_at_end(basic_block);
-
-        let old_vars = self.variables.clone();
-        for (i, arg) in args.iter().enumerate() {
-            let arg_value = function.get_nth_param(i as u32).unwrap().into_float_value();
-            let arg_alloca = self.create_entry_block_alloca(function, arg);
-            self.builder.build_store(arg_alloca, arg_value).unwrap();
-            self.variables.insert(arg.clone(), arg_value);
-        }
-
-        let return_value = match body {
-            Statement::Expression { expr } => self.compile_expr(expr)?,
-            _ => return Err("Function body must be an expression".to_string()),
-        };
-
-        self.builder.build_return(Some(&return_value)).unwrap();
-
-        self.variables = old_vars;
-
-        if function.verify(true) {
-            self.register_function(name.to_string(), function);
-            Ok(function)
-        } else {
-            Err("Invalid generated function.".to_string())
-        }
-    }
     fn compile_expr(&mut self, expr: &Expr) -> Result<FloatValue<'ctx>, String> {
         match expr {
             Expr::Number(n) => Ok(self.context.f64_type().const_float(*n as f64)),
