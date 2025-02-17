@@ -144,10 +144,15 @@ fn parse_function_def(pair: Pair<Rule>) -> Statement {
     
     let body = parse_block(inner.next().unwrap());
     
+    let body_statements = match body {
+        Statement::Block { statements } => statements,
+        single_statement => vec![single_statement],
+    };
+    
     Statement::Function {
         name,
         params,
-        body: Box::new(body)
+        body: Box::new(body_statements)
     }
 }
 
