@@ -32,25 +32,20 @@ impl<'ctx> CodeGen<'ctx> {
     }
 
     pub fn gen_print_str(&self, args: &[Expr]) -> Result<FloatValue<'ctx>, String> {
-        if let Some(print_str_fn) = self.imported_functions.get("print_str") {
-            let string_ptr = if let Expr::String(s) = &args[0] {
-                self.builder
-                    .build_global_string_ptr(s, "str")
-                    .map_err(|e| e.to_string())?
-                    .as_pointer_value()
-            } else {
-                return Err("Expected string argument".to_string());
-            };
-
-            self.builder.build_call(
-                *print_str_fn,
-                &[string_ptr.into()],
-                "calltmp"
-            ).map_err(|e| e.to_string())?;
-
+        if let Some(Expr::String(s)) = args.first() {
+            let print_str = self.module.get_function("print_str")
+                .ok_or_else(|| "print_str function not found".to_string())?;
+    
+            let str_ptr = self.builder.build_global_string_ptr(s, "str")
+                .map_err(|e| e.to_string())?;
+    
+            self.builder
+                .build_call(print_str, &[str_ptr.as_pointer_value().into()], "print_call")
+                .map_err(|e| e.to_string())?;
+    
             Ok(self.context.f64_type().const_float(0.0))
         } else {
-            Err("print_str function not imported".to_string())
+            Err("Expected string argument for print".to_string())
         }
     }
 
