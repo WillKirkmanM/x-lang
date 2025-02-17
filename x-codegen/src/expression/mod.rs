@@ -1,28 +1,37 @@
 use crate::CodeGen;
-use inkwell::values::FloatValue;
+use inkwell::values::{FloatValue, PointerValue};
 use x_ast::{Expr, Operator};
 
 impl<'ctx> CodeGen<'ctx> {
     pub(crate) fn gen_expr(&self, expr: &Expr) -> Result<FloatValue<'ctx>, String> {
         match expr {
-            Expr::Number(n) => {
-                Ok(self.context.f64_type().const_float(*n as f64))
-            },
+            Expr::Number(n) => Ok(self.context.f64_type().const_float(*n as f64)),
             Expr::Identifier(name) => {
-                self.variables.get(name)
-                    .cloned()
-                    .ok_or_else(|| format!("Undefined variable: {}", name))
+                if let Some(ptr) = self.variables.get(name) {
+                    Ok(self.builder
+                        .build_load(self.context.f64_type(), *ptr, name)
+                        .map_err(|e| e.to_string())?
+                        .into_float_value())
+                } else {
+                    Err(format!("Undefined variable: {}", name))
+                }
             },
             Expr::BinaryOp { left, op, right } => {
-                let l = self.gen_expr(left)?;
-                let r = self.gen_expr(right)?;
+                let lhs = self.gen_expr(left)?;
+                let rhs = self.gen_expr(right)?;
                 
                 match op {
-                    Operator::Add => self.builder.build_float_add(l, r, "addtmp"),
-                    Operator::Subtract => self.builder.build_float_sub(l, r, "subtmp"),
-                    Operator::Multiply => self.builder.build_float_mul(l, r, "multmp"),
-                    Operator::Divide => self.builder.build_float_div(l, r, "divtmp"),
-                }.map_err(|e| e.to_string())
+                    Operator::Add => Ok(self.builder
+                        .build_float_add(lhs, rhs, "addtmp")
+                        .map_err(|e| e.to_string())?),
+                    Operator::Subtract => Ok(self.builder.build_float_sub(lhs, rhs, "subtmp") 
+                        .map_err(|e| e.to_string())?),
+                    Operator::Multiply => Ok(self.builder
+                        .build_float_mul(lhs, rhs, "multmp")
+                        .map_err(|e| e.to_string())?),
+                    Operator::Divide => Ok(self.builder.build_float_div(lhs, rhs, "divtmp")
+                        .map_err(|e| e.to_string())?),
+                }
             },
             Expr::FunctionCall { name, args } => self.gen_function_call(name, args),
             Expr::String(_) => {
