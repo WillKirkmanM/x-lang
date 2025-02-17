@@ -14,6 +14,12 @@ fn main() {
         x * y;
     }
 
+    fn greet() {
+        print("Hello, world!");
+    }
+
+    greet();
+
     let result1 = add(3, 4);
     print("The result of 3 + 4 is:");
     print(result1);
