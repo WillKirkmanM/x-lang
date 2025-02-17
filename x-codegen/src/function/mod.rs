@@ -1,5 +1,6 @@
 use inkwell::values::FloatValue;
 use x_ast::Expr;
+use inkwell::values::BasicValueEnum;
 
 use crate::CodeGen;
 
@@ -18,27 +19,36 @@ impl<'ctx> CodeGen<'ctx> {
                 } else {
                     return Err(format!("Unknown function {}", name));
                 };
-    
+
+                let expected_args = f.count_params() as usize;
+                if expected_args != args.len() {
+                    return Err(format!(
+                        "Function '{}' expects {} arguments but got {}",
+                        name,
+                        expected_args,
+                        args.len()
+                    ));
+                }
+
                 let compiled_args: Vec<_> = args.iter()
                     .map(|arg| self.gen_expr(arg))
                     .collect::<Result<Vec<_>, _>>()?
                     .into_iter()
                     .map(|val| val.into())
                     .collect();
-    
-                let argslen = f.count_params() as usize;
-                if argslen != args.len() {
-                    return Err(format!("Expected {} arguments, got {}", argslen, args.len()));
-                }
-    
-                match self.builder.build_call(f, &compiled_args, "calltmp")
-                    .map_err(|e| e.to_string())?
-                    .try_as_basic_value()
-                    .left() {
+
+                let call_site = self.builder
+                    .build_call(f, &compiled_args, "calltmp")
+                    .map_err(|e| e.to_string())?;
+
+                match call_site.try_as_basic_value().left() {
                     Some(value) => Ok(value.into_float_value()),
-                    None => Err("Invalid call produced void value".to_string())
+                    None => {
+                        Ok(self.context.f64_type().const_float(0.0))
+                    }
                 }
             }
         }
     }
+
 }
