@@ -28,6 +28,7 @@ pub enum Statement {
     VariableDecl { name: String, value: Expr },
     Import { module: String, item: String },
     Function { name: String, params: Vec<String>, body: Box<Statement> },
+    Block { statements: Vec<Statement> },
 }
 
 #[derive(Debug, Clone, PartialEq)]
