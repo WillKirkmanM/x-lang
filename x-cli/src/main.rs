@@ -36,6 +36,31 @@ fn main() {
         print(n);
     }
 
+    fn test_comparisons(x, y) {
+        if x < y {
+            print("x is less than y");
+        }
+        if x <= y {
+            print("x is less than or equal to y");
+        }
+        if x > y {
+            print("x is greater than y");
+        }
+        if x >= y {
+            print("x is greater than or equal to y");
+        }
+        if x == y {
+            print("x is equal to y");
+        }
+        if x != y {
+            print("x is not equal to y");
+        }
+    }
+
+    test_comparisons(5, 10);
+    test_comparisons(10, 10);
+    test_comparisons(15, 10);
+
     let result1 = add(3, 4);
     print("The result of 3 + 4 is:");
     print(result1);
