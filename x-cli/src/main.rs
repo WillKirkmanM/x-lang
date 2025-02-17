@@ -75,6 +75,11 @@ fn main() {
     let result2 = multiply(3, 4);
     print("The result of 3 * 4 is:");
     print(result2);
+
+    let multiply = |x, y| { x * y };
+
+    print("The result of the closure is:");
+    print(multiply(4, 1));
     "#;
     let program = match parse(input) {
         Ok(p) => p,
@@ -95,8 +100,10 @@ fn main() {
             println!("{}", codegen.get_ir());
             
             match codegen.jit_execute() {
-                Ok(result) => println!("Result: {}", result),
-                Err(e) => eprintln!("Execution error: {}", e)
+                Ok(_result) => (),
+                Err(e) => {
+                    eprintln!("Execution error: {}", e);
+                }
             }
         },
         Err(e) => eprintln!("Codegen error: {}", e)
