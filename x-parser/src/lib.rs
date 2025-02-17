@@ -101,10 +101,20 @@ fn parse_program(pair: Pair<Rule>) -> Program {
 
 fn parse_statement(pair: Pair<Rule>) -> Statement {
     match pair.as_rule() {
-        Rule::COMMENT => Statement::Comment(pair.as_str().trim_start_matches("//").trim().to_string()),
-        _ => {
+        Rule::statement => {
             let inner = pair.into_inner().next().unwrap();
             match inner.as_rule() {
+                Rule::for_loop => {
+                    let mut inner_loop = inner.into_inner();
+                    let var = inner_loop.next().unwrap().as_str().to_string();
+                    let start = Box::new(parse_expr(inner_loop.next().unwrap()));
+                    let end = Box::new(parse_expr(inner_loop.next().unwrap()));
+                    let body = inner_loop.next().unwrap().into_inner()
+                        .map(parse_statement)
+                        .collect();
+                    
+                    Statement::ForLoop { var, start, end, body }
+                },
                 Rule::expr => Statement::Expression {
                     expr: parse_expr(inner)
                 },
@@ -121,9 +131,12 @@ fn parse_statement(pair: Pair<Rule>) -> Statement {
                     Statement::Import { module, item }
                 },
                 Rule::function_def => parse_function_def(inner),
-                _ => unreachable!()
+                Rule::COMMENT => Statement::Comment(inner.as_str().trim_start_matches("//").trim().to_string()),
+                _ => unreachable!("Unexpected rule in statement: {:?}", inner.as_rule())
             }
-        }
+        },
+        Rule::EOI => panic!("EOI should be handled in parse_program"),
+        _ => unreachable!("Unexpected top-level rule: {:?}", pair.as_rule())
     }
 }
 
