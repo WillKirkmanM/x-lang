@@ -16,6 +16,7 @@ pub mod function;
 pub mod import;
 pub mod statement;
 pub mod for_loop;
+pub mod r#if;
 
 pub struct CodeGen<'ctx> {
     context: &'ctx Context,
@@ -124,139 +125,6 @@ impl<'ctx> CodeGen<'ctx> {
         builder.build_alloca(self.context.f64_type(), name).unwrap()
     }
 
-
-    fn compile_expr(&mut self, expr: &Expr) -> Result<FloatValue<'ctx>, String> {
-        match expr {
-            Expr::Number(n) => Ok(self.context.f64_type().const_float(*n as f64)),
-            Expr::FunctionCall { name, args } => {
-                println!("Compiling function call: {}", name);
-                if name == "print" {
-                    if let Some(Expr::String(s)) = args.first() {
-                        let printf = self
-                            .module
-                            .get_function("printf")
-                            .ok_or_else(|| "printf function not found".to_string())?;
-
-                        let fmt_str = self
-                            .builder
-                            .build_global_string_ptr("%s\n", "fmt")
-                            .map_err(|e| e.to_string())?;
-
-                        let str_ptr = self
-                            .builder
-                            .build_global_string_ptr(s, "str")
-                            .map_err(|e| e.to_string())?;
-
-                        self.builder
-                            .build_call(
-                                printf,
-                                &[
-                                    fmt_str.as_pointer_value().into(),
-                                    str_ptr.as_pointer_value().into(),
-                                ],
-                                "printf_call",
-                            )
-                            .map_err(|e| e.to_string())?;
-
-                        return Ok(self.context.f64_type().const_float(0.0));
-                    }
-                }
-                self.compile_function_call(name, args)
-            }
-            Expr::String(s) => Ok(self.context.f64_type().const_float(s.len() as f64)),
-        Expr::Identifier(name) => {
-            match self.variables.get(name) {
-                Some(ptr) => Ok(self.builder
-                    .build_load(self.context.f64_type(), *ptr, name)
-                    .map_err(|e| e.to_string())?
-                    .into_float_value()),
-                None => Err(format!("Unknown variable: {}", name)),
-            }
-        },
-            Expr::BinaryOp { left, op, right } => {
-                let lhs = self.compile_expr(left)?;
-                let rhs = self.compile_expr(right)?;
-
-                match op {
-                    Operator::Add => Ok(self
-                        .builder
-                        .build_float_add(lhs, rhs, "addtmp")
-                        .map_err(|e| e.to_string())?),
-
-                    Operator::Subtract => Ok(self
-                        .builder
-                        .build_float_sub(lhs, rhs, "subtmp")
-                        .map_err(|e| e.to_string())?),
-
-                    Operator::Multiply => Ok(self
-                        .builder
-                        .build_float_mul(lhs, rhs, "multmp")
-                        .map_err(|e| e.to_string())?),
-
-                    Operator::Divide => Ok(self
-                        .builder
-                        .build_float_div(lhs, rhs, "divtmp")
-                        .map_err(|e| e.to_string())?),
-                    // Operator::LessThan => {
-                    //     let cmp = self.builder
-                    //         .build_float_compare(
-                    //             inkwell::FloatPredicate::OLT,
-                    //             lhs,
-                    //             rhs,
-                    //             "cmptmp"
-                    //         )
-                    //         .map_err(|e| e.to_string())?;
-
-                    //     Ok(self.builder
-                    //         .build_unsigned_int_to_float(
-                    //             cmp,
-                    //             self.context.f64_type(),
-                    //             "booltmp"
-                    //         )
-                    //         .map_err(|e| e.to_string())?)
-                    // },
-
-                    // Operator::GreaterThan => {
-                    //     let cmp = self.builder
-                    //         .build_float_compare(
-                    //             inkwell::FloatPredicate::OGT,
-                    //             lhs,
-                    //             rhs,
-                    //             "cmptmp"
-                    //         )
-                    //         .map_err(|e| e.to_string())?;
-
-                    //     Ok(self.builder
-                    //         .build_unsigned_int_to_float(
-                    //             cmp,
-                    //             self.context.f64_type(),
-                    //             "booltmp"
-                    //         )
-                    //         .map_err(|e| e.to_string())?)
-                    // },
-
-                    // Operator::Equals => {
-                    //     let cmp = self.builder
-                    //         .build_float_compare(
-                    //             inkwell::FloatPredicate::OEQ,
-                    //             lhs,
-                    //             rhs,
-                    //             "cmptmp"
-                    //         )
-                    //         .map_err(|e| e.to_string())?;
-
-                    //     Ok(self.builder
-                    //         .build_unsigned_int_to_float(
-                    //             cmp,
-                    //             self.context.f64_type(),
-                    //             "booltmp"
-                    //         )
-                    //         .map_err(|e| e.to_string())?)
-                    // }
-                }
-            }
-        }
-    }
     fn compile_function_call(
         &mut self,
         name: &str,
@@ -273,7 +141,7 @@ impl<'ctx> CodeGen<'ctx> {
 
         let mut compiled_args = Vec::new();
         for arg in args {
-            compiled_args.push(self.compile_expr(arg)?.into());
+            compiled_args.push(self.gen_expr(arg)?.into());
         }
 
         let argslen = f.count_params() as usize;
