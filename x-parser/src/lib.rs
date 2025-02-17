@@ -100,25 +100,30 @@ fn parse_program(pair: Pair<Rule>) -> Program {
 }
 
 fn parse_statement(pair: Pair<Rule>) -> Statement {
-    let inner = pair.into_inner().next().unwrap();
-    match inner.as_rule() {
-        Rule::expr => Statement::Expression {
-            expr: parse_expr(inner)
-        },
-        Rule::var_decl => {
-            let mut inner_rules = inner.into_inner();
-            let name = inner_rules.next().unwrap().as_str().to_string();
-            let expr = parse_expr(inner_rules.next().unwrap());
-            Statement::VariableDecl { name, value: expr }
-        },
-        Rule::import => {
-            let mut inner_rules = inner.into_inner();
-            let module = inner_rules.next().unwrap().as_str().to_string();
-            let item = inner_rules.next().unwrap().as_str().to_string();
-            Statement::Import { module, item }
-        },
-        Rule::function_def => parse_function_def(inner),
-        _ => unreachable!()
+    match pair.as_rule() {
+        Rule::COMMENT => Statement::Comment(pair.as_str().trim_start_matches("//").trim().to_string()),
+        _ => {
+            let inner = pair.into_inner().next().unwrap();
+            match inner.as_rule() {
+                Rule::expr => Statement::Expression {
+                    expr: parse_expr(inner)
+                },
+                Rule::var_decl => {
+                    let mut inner_rules = inner.into_inner();
+                    let name = inner_rules.next().unwrap().as_str().to_string();
+                    let expr = parse_expr(inner_rules.next().unwrap());
+                    Statement::VariableDecl { name, value: expr }
+                },
+                Rule::import => {
+                    let mut inner_rules = inner.into_inner();
+                    let module = inner_rules.next().unwrap().as_str().to_string();
+                    let item = inner_rules.next().unwrap().as_str().to_string();
+                    Statement::Import { module, item }
+                },
+                Rule::function_def => parse_function_def(inner),
+                _ => unreachable!()
+            }
+        }
     }
 }
 
