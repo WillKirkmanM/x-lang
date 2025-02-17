@@ -15,6 +15,13 @@ fn main() {
     }
 
     fn greet() {
+
+        let a = 3;
+        let b = 4;
+        let c = a + b;
+
+        print(c);
+
         print("1");
         print("2");
         print("3");
