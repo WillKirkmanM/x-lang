@@ -11,7 +11,7 @@ impl<'ctx> CodeGen<'ctx> {
         then_block: &[Statement],
         else_block: &Option<Vec<Statement>>,
     ) -> Result<Option<FloatValue<'ctx>>, String> {
-        let cond_val = self.gen_expr(condition)?;
+        let cond_val = self.gen_expr(condition)?.into_float_value();
         
         let parent = self.builder.get_insert_block().unwrap();
         let function = parent.get_parent().unwrap();
