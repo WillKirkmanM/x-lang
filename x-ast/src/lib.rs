@@ -26,6 +26,10 @@ pub enum Expr {
         name: String,
         args: Vec<Expr>
     },
+    AnonymousFunction {
+        params: Vec<String>,
+        body: Vec<Statement>
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
