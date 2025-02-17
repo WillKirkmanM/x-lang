@@ -15,8 +15,7 @@ impl<'ctx> StdLib<'ctx> {
         let module = context.create_module("stdlib");
         
         let i32_type = context.i32_type();
-        let i8_type = context.i8_type();
-        let i8_ptr_type = i8_type.ptr_type(AddressSpace::default());
+        let i8_ptr_type = context.ptr_type(AddressSpace::default());
         let f64_type = context.f64_type();
         
         let printf_type = i32_type.fn_type(&[i8_ptr_type.into()], true);
