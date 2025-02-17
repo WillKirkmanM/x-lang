@@ -14,6 +14,7 @@ use x_std::StdLib;
 pub mod statement;
 pub mod expression;
 pub mod import;
+pub mod function;
 
 pub struct CodeGen<'ctx> {
     context: &'ctx Context,
