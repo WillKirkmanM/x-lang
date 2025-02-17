@@ -61,8 +61,15 @@ fn main() {
     test_comparisons(10, 10);
     test_comparisons(15, 10);
 
+    fn say_hello(name) {
+        print("Hi {name}!");
+    }
+    
+    say_hello("world");
+    say_hello("moon");
+
     let result1 = add(3, 4);
-    print("The result of 3 + 4 is:");
+    print("The result of 3 + 4 is: {result1}.");
     print(result1);
 
     let result2 = multiply(3, 4);
