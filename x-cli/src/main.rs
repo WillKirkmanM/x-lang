@@ -32,6 +32,10 @@ fn main() {
     // hi
     greet();
 
+    for n in 7..19 {
+        print(n);
+    }
+
     let result1 = add(3, 4);
     print("The result of 3 + 4 is:");
     print(result1);
