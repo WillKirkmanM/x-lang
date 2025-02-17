@@ -1,8 +1,8 @@
-COMMENT = _{ "//" ~ (!NEWLINE ~ ANY)* ~ NEWLINE }
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" | COMMENT }
+COMMENT = _{ "//" ~ (!NEWLINE ~ ANY)* ~ NEWLINE }
 
 program = { SOI ~ statement* ~ EOI }
-statement = { for_loop | function_def | (var_decl | import | expr) ~ ";" }
+statement = { if_stmt | for_loop | function_def | (var_decl | import | expr) ~ ";" }
 
 function_def = { "fn" ~ identifier ~ "(" ~ params? ~ ")" ~ block }
 params = { identifier ~ ("," ~ identifier)* }
@@ -13,22 +13,21 @@ module = { identifier }
 item = { identifier }
 
 var_decl = { "let" ~ identifier ~ "=" ~ expr }
+if_stmt = { "if" ~ expr ~ block ~ ("else" ~ block)? }
+for_loop = { "for" ~ identifier ~ "in" ~ expr ~ ".." ~ expr ~ block }
 
-expr = { term ~ ((operator ~ term)*)? }
-operator = _{ add | subtract | multiply | divide }
-
-term = { function_call | number | string | identifier }
-
+expr = { term ~ (operator ~ term)* }
+term = { function_call | number | identifier | string | "(" ~ expr ~ ")" }
 function_call = { identifier ~ "(" ~ args? ~ ")" }
 args = { expr ~ ("," ~ expr)* }
 
-string = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
+operator = @{ "<=" | ">=" | "==" | "!=" | "<" | ">" | "+" | "-" | "*" | "/" }
+number = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
 identifier = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
-number = @{ ASCII_DIGIT+ }
-
-add = { "+" }
-subtract = { "-" }
-multiply = { "*" }
-divide = { "/" }
-
-for_loop = { "for" ~ identifier ~ "in" ~ expr ~ ".." ~ expr ~ block }
+string = ${ "\"" ~ inner_str ~ "\"" }
+inner_str = @{ char* }
+char = {
+    !("\"" | "\\") ~ ANY
+    | "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t")
+    | "\\" ~ ("u" ~ ASCII_HEX_DIGIT{4})
+}
