@@ -2,7 +2,6 @@ use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::values::FunctionValue;
 use inkwell::AddressSpace;
-use inkwell::attributes::{Attribute, AttributeLoc};
 
 pub struct StdLib<'ctx> {
     context: &'ctx Context,
