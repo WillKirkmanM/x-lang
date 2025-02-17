@@ -2,7 +2,7 @@ COMMENT = _{ "//" ~ (!NEWLINE ~ ANY)* ~ NEWLINE }
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" | COMMENT }
 
 program = { SOI ~ statement* ~ EOI }
-statement = { function_def | (var_decl | import | expr) ~ ";" }
+statement = { for_loop | function_def | (var_decl | import | expr) ~ ";" }
 
 function_def = { "fn" ~ identifier ~ "(" ~ params? ~ ")" ~ block }
 params = { identifier ~ ("," ~ identifier)* }
@@ -30,3 +30,5 @@ add = { "+" }
 subtract = { "-" }
 multiply = { "*" }
 divide = { "/" }
+
+for_loop = { "for" ~ identifier ~ "in" ~ expr ~ ".." ~ expr ~ block }
