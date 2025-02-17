@@ -8,7 +8,7 @@ use inkwell::{
     values::{FloatValue, FunctionValue, PointerValue},
     OptimizationLevel,
 };
-use x_ast::{Expr, Operator, Program, Statement};
+use x_ast::{Expr, Program, Statement};
 use x_std::StdLib;
 
 pub mod expression;
