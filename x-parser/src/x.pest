@@ -6,7 +6,8 @@ statement = { if_stmt | for_loop | function_def | (var_decl | import | expr) ~ "
 
 function_def = { "fn" ~ identifier ~ "(" ~ params? ~ ")" ~ block }
 params = { identifier ~ ("," ~ identifier)* }
-block = { "{" ~ statement* ~ "}" }
+block = { "{" ~ (statement* ~ block_expr?)? ~ "}" }
+block_expr = { expr ~ ";"? }
 
 import = { "import" ~ module ~ "::" ~ item }
 module = { identifier }
@@ -17,7 +18,8 @@ if_stmt = { "if" ~ expr ~ block ~ ("else" ~ block)? }
 for_loop = { "for" ~ identifier ~ "in" ~ expr ~ ".." ~ expr ~ block }
 
 expr = { term ~ (operator ~ term)* }
-term = { function_call | number | identifier | string | "(" ~ expr ~ ")" }
+term = { function_call | number | identifier | anonymous_fn | string | "(" ~ expr ~ ")" }
+anonymous_fn = { "|" ~ params? ~ "|" ~ block }
 function_call = { identifier ~ "(" ~ args? ~ ")" }
 args = { expr ~ ("," ~ expr)* }
 
