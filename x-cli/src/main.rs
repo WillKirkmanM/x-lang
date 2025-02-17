@@ -11,14 +11,14 @@ fn main() {
     }
     
     fn multiply(x, y) {
-        x * y;
+        x * y; // Return the Product of x and y
     }
 
     fn greet() {
 
         let a = 3;
         let b = 4;
-        let c = a + b;
+        let c = a + b; // Return the Sum of a and b
 
         print(c);
 
@@ -29,6 +29,7 @@ fn main() {
         print("Hello, World!");
     }
 
+    // hi
     greet();
 
     let result1 = add(3, 4);
