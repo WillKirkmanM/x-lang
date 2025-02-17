@@ -1,4 +1,4 @@
-use x_ast::{Expr, Operator, Program, Statement};
+use x_ast::{Expr, Operator, Program, Statement, StringLiteral, StringPart};
 use pest::{Parser, iterators::Pair};
 use pest_derive::Parser;
 
@@ -15,11 +15,7 @@ fn parse_term(pair: Pair<Rule>) -> Expr {
         Rule::function_call => parse_function_call(pair),
         Rule::identifier => Expr::Identifier(pair.as_str().to_string()),
         Rule::number => Expr::Number(pair.as_str().parse().unwrap()),
-        Rule::string => {
-            let s = pair.as_str();
-            let s = &s[1..s.len()-1]; // Remove quotes
-            Expr::String(s.to_string())
-        },
+        Rule::string => parse_string(pair),
         Rule::expr => parse_expr(pair),
         _ => unreachable!("Unexpected rule in term: {:?}", pair.as_rule()),
     }
@@ -209,4 +205,41 @@ fn parse_block(pair: Pair<Rule>) -> Statement {
     } else {
         Statement::Block { statements }
     }
+}
+
+fn parse_string(pair: Pair<Rule>) -> Expr {
+    let text = pair.as_str();
+    let content = &text[1..text.len()-1];
+    let mut parts = Vec::new();
+    let mut current_text = String::new();
+    let mut chars = content.chars().peekable();
+    
+    while let Some(c) = chars.next() {
+        if c == '{' {
+            if !current_text.is_empty() {
+                parts.push(StringPart::Text(current_text));
+                current_text = String::new();
+            }
+            
+            let mut var_name = String::new();
+            while let Some(c) = chars.next() {
+                if c == '}' {
+                    break;
+                }
+                var_name.push(c);
+            }
+            
+            parts.push(StringPart::Interpolation(Box::new(
+                Expr::Identifier(var_name)
+            )));
+        } else {
+            current_text.push(c);
+        }
+    }
+    
+    if !current_text.is_empty() {
+        parts.push(StringPart::Text(current_text));
+    }
+    
+    Expr::String(StringLiteral { parts })
 }
