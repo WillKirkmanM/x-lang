@@ -126,13 +126,21 @@ fn parse_function_def(pair: Pair<Rule>) -> Statement {
     let mut inner = pair.into_inner();
     let name = inner.next().unwrap().as_str().to_string();
     
-    let params = if let Some(params_pair) = inner.next() {
-        params_pair.into_inner()
-            .map(|param| param.as_str().to_string())
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let params = inner.peek()
+        .map(|pair| {
+            if pair.as_rule() == Rule::params {
+                pair.into_inner()
+                    .map(|param| param.as_str().to_string())
+                    .collect()
+            } else {
+                Vec::new()
+            }
+        })
+        .unwrap_or_else(Vec::new);
+    
+    if !params.is_empty() {
+        inner.next();
+    }
     
     let body = parse_block(inner.next().unwrap());
     
