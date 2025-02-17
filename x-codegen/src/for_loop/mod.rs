@@ -38,7 +38,7 @@ impl<'ctx> CodeGen<'ctx> {
             .map_err(|e| e.to_string())?
             .into_float_value();
         
-        let end_val = self.gen_expr(end)?;
+        let end_val = self.gen_expr(end)?.into_float_value();
         let condition = self.builder
             .build_float_compare(
                 FloatPredicate::OLT,
