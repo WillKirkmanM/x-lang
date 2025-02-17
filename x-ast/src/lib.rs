@@ -30,6 +30,12 @@ pub enum Statement {
     Function { name: String, params: Vec<String>, body: Box<Vec<Statement>> },
     Block { statements: Vec<Statement> },
     Comment(String),
+    ForLoop {
+        var: String,
+        start: Box<Expr>,
+        end: Box<Expr>,
+        body: Vec<Statement>
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
