@@ -10,18 +10,23 @@ impl<'ctx> CodeGen<'ctx> {
         match stmt {
             Statement::Expression { expr } => Ok(Some(self.gen_expr(expr)?.into_float_value())),
             Statement::VariableDecl { name, value } => {
+                self.current_binding_name = Some(name.clone());
+                
                 let alloca = self
                     .builder
                     .build_alloca(self.context.f64_type(), name)
                     .map_err(|e| e.to_string())?;
-
+            
                 let val = self.gen_expr(value)?;
+                
+                self.current_binding_name = None;
+                
                 self.builder
                     .build_store(alloca, val)
                     .map_err(|e| e.to_string())?;
-
+            
                 self.variables.insert(name.clone(), alloca);
-
+            
                 Ok(None)
             }
             Statement::Import { module, item } => {
