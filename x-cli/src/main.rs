@@ -76,10 +76,15 @@ fn main() {
     print("The result of 3 * 4 is:");
     print(result2);
 
-    let multiply = |x, y| { x * y };
+    let mul = |x, y| { x * y };
+    let div = |x, y| { x / y };
 
-    print("The result of the closure is:");
-    print(multiply(4, 1));
+    print("The result of the multiply closure is:");
+    print(mul(4, 1));
+
+    print("The result of the divide closure is:");
+    print(div(7, 1));
+
     "#;
     let program = match parse(input) {
         Ok(p) => p,
