@@ -5,10 +5,10 @@ use inkwell::{
     context::Context,
     execution_engine::ExecutionEngine,
     module::Module,
-    values::{FloatValue, FunctionValue, PointerValue},
+    values::{FunctionValue, PointerValue},
     OptimizationLevel,
 };
-use x_ast::{Expr, Program, Statement};
+use x_ast::{Program, Statement};
 use x_std::StdLib;
 
 pub mod expression;
@@ -26,7 +26,10 @@ pub struct CodeGen<'ctx> {
     variables: HashMap<String, PointerValue<'ctx>>,
     stdlib: StdLib<'ctx>,
     functions: HashMap<String, FunctionValue<'ctx>>,
+    original_to_generated: HashMap<String, String>,
+    generated_to_original: HashMap<String, String>,
     imported_functions: HashMap<String, FunctionValue<'ctx>>,
+    current_binding_name: Option<String>,
 }
 
 impl<'ctx> CodeGen<'ctx> {
@@ -49,14 +52,13 @@ impl<'ctx> CodeGen<'ctx> {
             variables: std::collections::HashMap::new(),
             stdlib,
             functions: HashMap::new(),
+            original_to_generated: HashMap::new(),
+            generated_to_original: HashMap::new(),
             imported_functions: std::collections::HashMap::new(),
+            current_binding_name: None,
         }
     }
 
-    pub fn register_function(&mut self, name: String, function: FunctionValue<'ctx>) {
-        println!("Registering function: {}", name);
-        self.functions.insert(name, function);
-    }
 
     pub fn generate(&mut self, program: Program) -> Result<(), String> {
         for stmt in &program.statements {
@@ -123,46 +125,6 @@ impl<'ctx> CodeGen<'ctx> {
         }
 
         builder.build_alloca(self.context.f64_type(), name).unwrap()
-    }
-
-    fn compile_function_call(
-        &mut self,
-        name: &str,
-        args: &[Expr],
-    ) -> Result<FloatValue<'ctx>, String> {
-        println!("Functions in scope: {:?}", self.functions.keys());
-        let f = self
-            .functions
-            .get(name)
-            .copied()
-            .or_else(|| self.module.get_function(name))
-            .or_else(|| self.imported_functions.get(name).copied())
-            .ok_or_else(|| format!("Unknown function {}", name))?;
-
-        let mut compiled_args = Vec::new();
-        for arg in args {
-            compiled_args.push(self.gen_expr(arg)?.into());
-        }
-
-        let argslen = f.count_params() as usize;
-        if argslen != args.len() {
-            return Err(format!(
-                "Expected {} arguments, got {}",
-                argslen,
-                args.len()
-            ));
-        }
-
-        match self
-            .builder
-            .build_call(f, &compiled_args, "calltmp")
-            .unwrap()
-            .try_as_basic_value()
-            .left()
-        {
-            Some(value) => Ok(value.into_float_value()),
-            None => Err("Invalid call produced void value".to_string()),
-        }
     }
 }
 
