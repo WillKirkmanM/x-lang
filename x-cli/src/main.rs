@@ -1,3 +1,5 @@
+use std::process::Command;
+
 use inkwell::context::Context;
 use x_parser::parse;
 use x_codegen::CodeGen;
@@ -99,7 +101,7 @@ fn main() {
     let context = Context::create();
     let mut codegen = CodeGen::new(&context, "main");
     
-    match codegen.generate(program) {
+    match codegen.generate(program.clone()) {
         Ok(_) => {
             println!("Generated LLVM IR:");
             println!("{}", codegen.get_ir());
@@ -113,4 +115,41 @@ fn main() {
         },
         Err(e) => eprintln!("Codegen error: {}", e)
     }
+
+    // match codegen.generate(program) {
+    //     Ok(_) => {
+    //         println!("Generated LLVM IR:");
+    //         println!("{}", codegen.get_ir());
+            
+    //         std::fs::write("output.ll", codegen.get_ir()).expect("Failed to write IR");
+            
+    //         Command::new("llc")
+    //             .args([
+    //                 "-opaque-pointers",
+    //                 "-filetype=obj",
+    //                 "-relocation-model=pic",
+    //                 "output.ll",
+    //                 "-o",
+    //                 "output.o"
+    //             ])
+    //             .status()
+    //             .expect("Failed to run llc");
+                
+    //         Command::new("clang")
+    //             .args([
+    //                 "output.o",
+    //                 "-o",
+    //                 "program",
+    //                 "-fPIE",
+    //                 "-pie",
+    //                 "-lm"
+    //             ])
+    //             .status()
+    //             .expect("Failed to link");
+                
+    //         std::fs::remove_file("output.ll").ok();
+    //         std::fs::remove_file("output.o").ok();
+    //     },
+    //     Err(e) => eprintln!("Codegen error: {}", e)
+    // }
 }
