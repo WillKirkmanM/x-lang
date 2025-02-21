@@ -59,13 +59,23 @@ impl<'ctx> CodeGen<'ctx> {
                 Ok(global_str.as_pointer_value().into())
             },
             Expr::AnonymousFunction { params, body } => {
-                let function = self.compile_anonymous_function(params, body)?;
+                let lambda_name = format!("lambda_{}", self.get_unique_id());
+                
+                let function = self.compile_anonymous_function(params, body, &lambda_name)?;
+                
+                if let Some(binding_name) = self.current_binding_name.as_ref() {
+                    self.register_function(binding_name.clone(), function);
+                } else {
+                    self.register_function(lambda_name.clone(), function);
+                }
+                
                 let fn_ptr = self.builder.build_alloca(
                     self.context.ptr_type(AddressSpace::default()),
                     "anonymous_fn"
                 ).map_err(|e| e.to_string())?;
                 
-                self.builder.build_store(fn_ptr, function.as_global_value().as_pointer_value())
+                self.builder
+                    .build_store(fn_ptr, function.as_global_value().as_pointer_value())
                     .map_err(|e| e.to_string())?;
                 
                 Ok(fn_ptr.into())
