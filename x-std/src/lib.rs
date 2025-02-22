@@ -27,7 +27,7 @@ impl<'ctx> StdLib<'ctx> {
         let builder = context.create_builder();
         builder.position_at_end(basic_block);
         
-        let fmt_str = builder.build_global_string_ptr("%f\n", "fmt_str")
+        let fmt_str = builder.build_global_string_ptr("%.0f\n", "fmt_str")
             .unwrap()
             .as_pointer_value();
         
