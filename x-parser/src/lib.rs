@@ -9,6 +9,27 @@ struct XParser;
 fn parse_term(pair: Pair<Rule>) -> Expr {
     match pair.as_rule() {
         Rule::term => {
+            let mut expr = None;
+            let mut pairs = pair.into_inner().peekable();
+            
+            if let Some(primary_pair) = pairs.next() {
+                expr = Some(parse_term(primary_pair));
+                
+                while let Some(postfix) = pairs.next() {
+                    if postfix.as_rule() == Rule::postfix {
+                        let inner_expr = expr.take().unwrap();
+                        let index_expr = parse_expr(postfix.into_inner().next().unwrap());
+                        expr = Some(Expr::ArrayAccess {
+                            array: Box::new(inner_expr),
+                            index: Box::new(index_expr)
+                        });
+                    }
+                }
+            }
+            
+            expr.unwrap_or_else(|| unreachable!("Term should have at least a primary expression"))
+        },
+        Rule::primary => {
             let inner = pair.into_inner().next().unwrap();
             parse_term(inner)
         },
@@ -18,6 +39,7 @@ fn parse_term(pair: Pair<Rule>) -> Expr {
         Rule::string => parse_string(pair),
         Rule::expr => parse_expr(pair),
         Rule::anonymous_fn => parse_anonymous_fn(pair),
+        Rule::array_literal => parse_array_literal(pair),
         _ => unreachable!("Unexpected rule in term: {:?}", pair.as_rule()),
     }
 }
@@ -278,4 +300,11 @@ fn parse_string(pair: Pair<Rule>) -> Expr {
     }
     
     Expr::String(StringLiteral { parts })
+}
+
+fn parse_array_literal(pair: Pair<Rule>) -> Expr {
+    let elements = pair.into_inner()
+        .map(parse_expr)
+        .collect();
+    Expr::Array(elements)
 }
