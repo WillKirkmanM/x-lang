@@ -1,8 +1,8 @@
 use std::process::Command;
 
 use inkwell::context::Context;
-use x_parser::parse;
 use x_codegen::CodeGen;
+use x_parser::parse;
 
 fn main() {
     let input = r#"
@@ -87,6 +87,10 @@ fn main() {
     print("The result of the divide closure is:");
     print(div(7, 1));
 
+    let arr = [1, 2, 3, 4, 5];
+
+    let two = arr[3];
+    print(two);
     "#;
     let program = match parse(input) {
         Ok(p) => p,
@@ -100,29 +104,29 @@ fn main() {
 
     let context = Context::create();
     let mut codegen = CodeGen::new(&context, "main");
-    
+
     match codegen.generate(program.clone()) {
         Ok(_) => {
             println!("Generated LLVM IR:");
             println!("{}", codegen.get_ir());
-            
+
             match codegen.jit_execute() {
                 Ok(_result) => (),
                 Err(e) => {
                     eprintln!("Execution error: {}", e);
                 }
             }
-        },
-        Err(e) => eprintln!("Codegen error: {}", e)
+        }
+        Err(e) => eprintln!("Codegen error: {}", e),
     }
 
     // match codegen.generate(program) {
     //     Ok(_) => {
     //         println!("Generated LLVM IR:");
     //         println!("{}", codegen.get_ir());
-            
+
     //         std::fs::write("output.ll", codegen.get_ir()).expect("Failed to write IR");
-            
+
     //         Command::new("llc")
     //             .args([
     //                 "-opaque-pointers",
@@ -134,7 +138,7 @@ fn main() {
     //             ])
     //             .status()
     //             .expect("Failed to run llc");
-                
+
     //         Command::new("clang")
     //             .args([
     //                 "output.o",
@@ -146,7 +150,7 @@ fn main() {
     //             ])
     //             .status()
     //             .expect("Failed to link");
-                
+
     //         std::fs::remove_file("output.ll").ok();
     //         std::fs::remove_file("output.o").ok();
     //     },
