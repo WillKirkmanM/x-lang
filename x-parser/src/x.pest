@@ -18,10 +18,16 @@ if_stmt = { "if" ~ expr ~ block ~ ("else" ~ block)? }
 for_loop = { "for" ~ identifier ~ "in" ~ expr ~ ".." ~ expr ~ block }
 
 expr = { term ~ (operator ~ term)* }
-term = { function_call | number | identifier | anonymous_fn | string | "(" ~ expr ~ ")" }
+
+primary = { function_call | number | identifier | anonymous_fn | string | array_literal | "(" ~ expr ~ ")" }
+term = { primary ~ postfix* }
+postfix = { "[" ~ expr ~ "]" }
+
 anonymous_fn = { "|" ~ params? ~ "|" ~ block }
 function_call = { identifier ~ "(" ~ args? ~ ")" }
 args = { expr ~ ("," ~ expr)* }
+
+array_literal = { "[" ~ (expr ~ ("," ~ expr)*)? ~ "]" }
 
 operator = @{ "<=" | ">=" | "==" | "!=" | "<" | ">" | "+" | "-" | "*" | "/" }
 number = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
@@ -32,3 +38,4 @@ interpolation = { "{" ~ identifier ~ "}" }
 string_char = @{
     !("{" | "\"") ~ ANY
 }
+
