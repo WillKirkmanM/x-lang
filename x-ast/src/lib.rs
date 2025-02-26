@@ -87,6 +87,7 @@ pub enum Statement {
         then_block: Vec<Statement>,
         else_block: Option<Vec<Statement>>,
     },
+    WhileLoop { condition: Expr, body: Vec<Statement> },
 }
 
 #[derive(Debug, Clone, PartialEq)]
