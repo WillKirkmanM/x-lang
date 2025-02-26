@@ -2,7 +2,7 @@ WHITESPACE = _{ " " | "\t" | "\r" | "\n" | COMMENT }
 COMMENT = _{ "//" ~ (!NEWLINE ~ ANY)* ~ NEWLINE }
 
 program = { SOI ~ statement* ~ EOI }
-statement = { if_stmt | for_loop | function_def | (var_decl | import | expr) ~ ";" }
+statement = { if_stmt | for_loop | while_loop | function_def | (var_decl | import | expr) ~ ";" }
 
 function_def = { "fn" ~ identifier ~ "(" ~ params? ~ ")" ~ block }
 params = { identifier ~ ("," ~ identifier)* }
@@ -16,6 +16,7 @@ item = { identifier }
 var_decl = { "let" ~ identifier ~ "=" ~ expr }
 if_stmt = { "if" ~ expr ~ block ~ ("else" ~ block)? }
 for_loop = { "for" ~ identifier ~ "in" ~ expr ~ ".." ~ expr ~ block }
+while_loop = { "while" ~ expr ~ block }
 
 expr = { term ~ (operator ~ term)* }
 
@@ -29,7 +30,19 @@ args = { expr ~ ("," ~ expr)* }
 
 array_literal = { "[" ~ (expr ~ ("," ~ expr)*)? ~ "]" }
 
-operator = @{ "<=" | ">=" | "==" | "!=" | "<" | ">" | "+" | "-" | "*" | "/" }
+operator = _{ eq_op | neq_op | le_op | ge_op | lt_op | gt_op | add_op | sub_op | mul_op | div_op | assign_op }
+eq_op = { "==" }
+neq_op = { "!=" }
+le_op = { "<=" }
+ge_op = { ">=" }
+lt_op = { "<" }
+gt_op = { ">" }
+add_op = { "+" }
+sub_op = { "-" }
+mul_op = { "*" }
+div_op = { "/" }
+assign_op = { "=" }
+
 number = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
 identifier = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
 string = { "\"" ~ inner_str ~ "\"" }
