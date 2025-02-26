@@ -17,6 +17,7 @@ pub mod import;
 pub mod statement;
 pub mod for_loop;
 pub mod r#if;
+pub mod r#while;
 
 pub struct CodeGen<'ctx> {
     context: &'ctx Context,
