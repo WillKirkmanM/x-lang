@@ -91,6 +91,13 @@ fn main() {
 
     let two = arr[3];
     print(two);
+
+    let i = 0;
+    while i < 5 {
+        print(i);
+        i = i + 1;
+    }
+
     "#;
     let program = match parse(input) {
         Ok(p) => p,
