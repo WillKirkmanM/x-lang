@@ -10,6 +10,7 @@ pub enum Operator {
     GreaterThanOrEqual,
     Equal,
     NotEqual,
+    Assign,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -29,6 +30,15 @@ pub enum Expr {
     AnonymousFunction {
         params: Vec<String>,
         body: Vec<Statement>
+    },
+    Array(Vec<Expr>),
+    ArrayAccess {
+        array: Box<Expr>,
+        index: Box<Expr>
+    },
+    Assignment {
+        target: Box<Expr>,
+        value: Box<Expr>
     }
 }
 
