@@ -1,6 +1,7 @@
 use x_ast::{Expr, Operator, Program, Statement, StringLiteral, StringPart};
 use pest::{Parser, iterators::Pair};
 use pest_derive::Parser;
+use pest::pratt_parser::{PrattParser, Assoc, Op};
 
 #[derive(Parser)]
 #[grammar = "x.pest"]
@@ -80,26 +81,45 @@ fn parse_function_call(pair: Pair<Rule>) -> Expr {
 }
 
 fn parse_expr(pair: Pair<Rule>) -> Expr {
-    match pair.as_rule() {
-        Rule::expr => {
-            let mut pairs = pair.into_inner().peekable();
-            let mut left = parse_term(pairs.next().unwrap());
+    let pratt = PrattParser::new()
+        .op(Op::infix(Rule::eq_op, Assoc::Left) | Op::infix(Rule::neq_op, Assoc::Left))
+        .op(Op::infix(Rule::lt_op, Assoc::Left) | 
+            Op::infix(Rule::gt_op, Assoc::Left) | 
+            Op::infix(Rule::le_op, Assoc::Left) | 
+            Op::infix(Rule::ge_op, Assoc::Left))
+        .op(Op::infix(Rule::add_op, Assoc::Left) | Op::infix(Rule::sub_op, Assoc::Left))
+        .op(Op::infix(Rule::mul_op, Assoc::Left) | Op::infix(Rule::div_op, Assoc::Left))
+        .op(Op::infix(Rule::assign_op, Assoc::Right));
 
-            while let Some(op_pair) = pairs.next() {
-                let op = parse_operator(op_pair.as_str());
-                if let Some(right_pair) = pairs.next() {
-                    let right = parse_term(right_pair);
-                    left = Expr::BinaryOp {
-                        left: Box::new(left),
-                        op,
-                        right: Box::new(right),
-                    };
-                }
-            }
-            left
-        },
-        _ => parse_term(pair),
-    }
+    pratt.map_primary(|pair| {
+        match pair.as_rule() {
+            Rule::term => parse_term(pair),
+            _ => unreachable!("Unexpected rule in primary: {:?}", pair.as_rule()),
+        }
+    })
+    .map_infix(|lhs, op, rhs| {
+        let operator = match op.as_rule() {
+            Rule::add_op => Operator::Add,
+            Rule::sub_op => Operator::Subtract,
+            Rule::mul_op => Operator::Multiply,
+            Rule::div_op => Operator::Divide,
+            Rule::lt_op => Operator::LessThan,
+            Rule::gt_op => Operator::GreaterThan,
+            Rule::le_op => Operator::LessThanOrEqual,
+            Rule::ge_op => Operator::GreaterThanOrEqual,
+            Rule::eq_op => Operator::Equal,
+            Rule::neq_op => Operator::NotEqual,
+            Rule::assign_op => Operator::Assign,
+            _ => unreachable!("Unknown operator rule: {:?}", op.as_rule()),
+        };
+        
+        Expr::BinaryOp {
+            left: Box::new(lhs),
+            op: operator,
+            right: Box::new(rhs),
+        }
+    })
+    .parse(pair.into_inner())
 }
 
 fn parse_operator(op: &str) -> Operator {
@@ -114,6 +134,7 @@ fn parse_operator(op: &str) -> Operator {
         ">=" => Operator::GreaterThanOrEqual,
         "==" => Operator::Equal,
         "!=" => Operator::NotEqual,
+        "=" => Operator::Assign,
         _ => unreachable!("Unknown operator: {}", op),
     }
 }
@@ -179,6 +200,7 @@ fn parse_statement(pair: Pair<Rule>) -> Statement {
                     
                     Statement::ForLoop { var, start, end, body }
                 },
+                Rule::while_loop => parse_while_loop(inner),
                 Rule::block_expr => Statement::Expression {
                     expr: parse_expr(inner)
                 },
@@ -307,4 +329,17 @@ fn parse_array_literal(pair: Pair<Rule>) -> Expr {
         .map(parse_expr)
         .collect();
     Expr::Array(elements)
+}
+
+fn parse_while_loop(pair: Pair<Rule>) -> Statement {
+    let mut inner = pair.into_inner();
+    let condition = parse_expr(inner.next().unwrap());
+    let body_stmt = parse_block(inner.next().unwrap());
+    
+    let body = match body_stmt {
+        Statement::Block { statements } => statements,
+        single_statement => vec![single_statement],
+    };
+    
+    Statement::WhileLoop { condition, body }
 }
