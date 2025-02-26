@@ -53,6 +53,10 @@ impl<'ctx> CodeGen<'ctx> {
             Statement::If { condition, then_block, else_block } => {
                 self.gen_if(condition, then_block, else_block)
             },
+            Statement::WhileLoop { condition, body } => {
+                self.gen_while_loop(condition, body)?;
+                Ok(None)
+            },
         }
     }
 }
