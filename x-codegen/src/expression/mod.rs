@@ -22,6 +22,36 @@ impl<'ctx> CodeGen<'ctx> {
                 }
             }
             Expr::BinaryOp { left, op, right } => {
+                if let Operator::Add = op {
+                    if let Expr::BinaryOp { left: inner_left, op: inner_op, right: inner_right } = left.as_ref() {
+                        if let Operator::Assign = inner_op {
+                            if let Expr::Identifier(name) = inner_left.as_ref() {
+                                if let Expr::Identifier(right_name) = inner_right.as_ref() {
+                                    if name == right_name {
+                                        if let Some(&ptr) = self.variables.get(name) {
+                                            let var_val = self.builder
+                                                .build_load(self.context.f64_type(), ptr, name)
+                                                .map_err(|e| e.to_string())?
+                                                .into_float_value();
+                                            
+                                            let rhs = self.gen_expr(right)?.into_float_value();
+                                            let add_result = self.builder
+                                                .build_float_add(var_val, rhs, "addtmp")
+                                                .map_err(|e| e.to_string())?;
+                                            
+                                            self.builder
+                                                .build_store(ptr, add_result)
+                                                .map_err(|e| e.to_string())?;
+                                            
+                                            return Ok(add_result.into());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 if let Operator::Assign = op {
                     match left.as_ref() {
                         Expr::Identifier(name) => {
