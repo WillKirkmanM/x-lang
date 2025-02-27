@@ -18,6 +18,7 @@ pub mod statement;
 pub mod for_loop;
 pub mod r#if;
 pub mod r#while;
+pub mod r#struct;
 
 pub struct CodeGen<'ctx> {
     context: &'ctx Context,
@@ -31,6 +32,8 @@ pub struct CodeGen<'ctx> {
     generated_to_original: HashMap<String, String>,
     imported_functions: HashMap<String, FunctionValue<'ctx>>,
     current_binding_name: Option<String>,
+    struct_types: HashMap<String, (inkwell::types::StructType<'ctx>, Vec<String>)>,
+    variable_types: HashMap<String, String>,
 }
 
 impl<'ctx> CodeGen<'ctx> {
@@ -57,6 +60,8 @@ impl<'ctx> CodeGen<'ctx> {
             generated_to_original: HashMap::new(),
             imported_functions: std::collections::HashMap::new(),
             current_binding_name: None,
+            struct_types: HashMap::new(),
+            variable_types: HashMap::new(),
         }
     }
 
