@@ -89,7 +89,7 @@ fn main() {
 
     let arr = [1, 2, 3, 4, 5];
 
-    let two = arr[3];
+    let two = arr[1];
     print(two);
 
     let i = 0;
@@ -97,6 +97,20 @@ fn main() {
         print(i);
         i = i + 1;
     }
+
+    struct Point {
+        x,
+        y
+    }
+
+    let p = Point{ x: 10.0, y: 20.0 };
+    print("Point coordinates:");
+    print(p.x);
+    print(p.y);
+    
+    p.x = 30.0;
+    print("Updated X coordinate:");
+    print(p.x);
 
     "#;
     let program = match parse(input) {
