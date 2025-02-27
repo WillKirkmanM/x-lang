@@ -1,4 +1,3 @@
-use inkwell::values::FloatValue;
 use inkwell::FloatPredicate;
 use x_ast::{Expr, Statement};
 
