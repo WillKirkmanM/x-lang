@@ -1,4 +1,4 @@
-use x_ast::{Expr, Operator, Program, Statement, StringLiteral, StringPart};
+use x_ast::{Expr, Operator, Program, Statement, StringLiteral, StringPart, StructDef, StructInit};
 use pest::{Parser, iterators::Pair};
 use pest_derive::Parser;
 use pest::pratt_parser::{PrattParser, Assoc, Op};
@@ -8,10 +8,10 @@ use pest::pratt_parser::{PrattParser, Assoc, Op};
 struct XParser;
 
 fn parse_term(pair: Pair<Rule>) -> Expr {
-    match pair.as_rule() {
+    let mut base = match pair.as_rule() {
         Rule::term => {
             let mut expr = None;
-            let mut pairs = pair.into_inner().peekable();
+            let mut pairs = pair.clone().into_inner().peekable();
             
             if let Some(primary_pair) = pairs.next() {
                 expr = Some(parse_term(primary_pair));
@@ -19,11 +19,24 @@ fn parse_term(pair: Pair<Rule>) -> Expr {
                 while let Some(postfix) = pairs.next() {
                     if postfix.as_rule() == Rule::postfix {
                         let inner_expr = expr.take().unwrap();
-                        let index_expr = parse_expr(postfix.into_inner().next().unwrap());
-                        expr = Some(Expr::ArrayAccess {
-                            array: Box::new(inner_expr),
-                            index: Box::new(index_expr)
-                        });
+                        let inner = postfix.into_inner().next().unwrap();
+                        match inner.as_rule() {
+                            Rule::expr => {
+                                let index_expr = parse_expr(inner);
+                                expr = Some(Expr::ArrayAccess {
+                                    array: Box::new(inner_expr),
+                                    index: Box::new(index_expr)
+                                });
+                            },
+                            Rule::identifier => {
+                                let field = inner.as_str().to_string();
+                                expr = Some(Expr::FieldAccess {
+                                    object: Box::new(inner_expr),
+                                    field,
+                                });
+                            },
+                            _ => unreachable!("Unexpected rule in postfix: {:?}", inner.as_rule()),
+                        }
                     }
                 }
             }
@@ -31,18 +44,63 @@ fn parse_term(pair: Pair<Rule>) -> Expr {
             expr.unwrap_or_else(|| unreachable!("Term should have at least a primary expression"))
         },
         Rule::primary => {
-            let inner = pair.into_inner().next().unwrap();
+            let inner = pair.clone().into_inner().next().unwrap();
             parse_term(inner)
         },
-        Rule::function_call => parse_function_call(pair),
+        Rule::function_call => parse_function_call(pair.clone()),
         Rule::identifier => Expr::Identifier(pair.as_str().to_string()),
-        Rule::number => Expr::Number(pair.as_str().parse().unwrap()),
-        Rule::string => parse_string(pair),
-        Rule::expr => parse_expr(pair),
-        Rule::anonymous_fn => parse_anonymous_fn(pair),
-        Rule::array_literal => parse_array_literal(pair),
+        Rule::number => {
+            let num_str = pair.as_str();
+            if num_str.contains('.') {
+                Expr::Number(num_str.parse::<f64>().unwrap_or_else(|e| {
+                    panic!("Failed to parse float '{}': {}", num_str, e);
+                }))
+            } else {
+                let int_val: i64 = num_str.parse().unwrap_or_else(|e| {
+                    panic!("Failed to parse integer '{}': {}", num_str, e);
+                });
+                Expr::Number(int_val as f64)
+            }
+        },
+        Rule::string => parse_string(pair.clone()),
+        Rule::expr => parse_expr(pair.clone()),
+        Rule::anonymous_fn => parse_anonymous_fn(pair.clone()),
+        Rule::array_literal => parse_array_literal(pair.clone()),
+        Rule::struct_instantiate => parse_struct_instantiate(pair.clone()),
         _ => unreachable!("Unexpected rule in term: {:?}", pair.as_rule()),
+    };
+    
+    if matches!(pair.as_rule(), Rule::term | Rule::primary) {
+        for postfix in pair.into_inner().skip(1) {
+            match postfix.as_rule() {
+                Rule::postfix => {
+                    let inner = postfix.into_inner().next().unwrap();
+                    match inner.as_rule() {
+                        Rule::expr => {
+                            // Array access
+                            let index = parse_expr(inner);
+                            base = Expr::ArrayAccess {
+                                array: Box::new(base),
+                                index: Box::new(index),
+                            };
+                        }
+                        Rule::identifier => {
+                            // Field access
+                            let field = inner.as_str().to_string();
+                            base = Expr::FieldAccess {
+                                object: Box::new(base),
+                                field,
+                            };
+                        }
+                        _ => unreachable!("Unexpected rule in postfix: {:?}", inner.as_rule()),
+                    }
+                }
+                _ => unreachable!("Unexpected rule following primary: {:?}", postfix.as_rule()),
+            }
+        }
     }
+    
+    base
 }
 
 fn parse_anonymous_fn(pair: Pair<Rule>) -> Expr {
@@ -120,23 +178,6 @@ fn parse_expr(pair: Pair<Rule>) -> Expr {
         }
     })
     .parse(pair.into_inner())
-}
-
-fn parse_operator(op: &str) -> Operator {
-    match op {
-        "+" => Operator::Add,
-        "-" => Operator::Subtract,
-        "*" => Operator::Multiply,
-        "/" => Operator::Divide,
-        "<" => Operator::LessThan,
-        ">" => Operator::GreaterThan,
-        "<=" => Operator::LessThanOrEqual,
-        ">=" => Operator::GreaterThanOrEqual,
-        "==" => Operator::Equal,
-        "!=" => Operator::NotEqual,
-        "=" => Operator::Assign,
-        _ => unreachable!("Unknown operator: {}", op),
-    }
 }
 
 pub fn parse(input: &str) -> Result<Program, String> {
@@ -220,6 +261,7 @@ fn parse_statement(pair: Pair<Rule>) -> Statement {
                     Statement::Import { module, item }
                 },
                 Rule::function_def => parse_function_def(inner),
+                Rule::struct_decl => parse_struct_decl(inner),
                 Rule::COMMENT => Statement::Comment(inner.as_str().trim_start_matches("//").trim().to_string()),
                 _ => unreachable!("Unexpected rule in statement: {:?}", inner.as_rule())
             }
@@ -342,4 +384,39 @@ fn parse_while_loop(pair: Pair<Rule>) -> Statement {
     };
     
     Statement::WhileLoop { condition, body }
+}
+
+fn parse_struct_decl(pair: Pair<Rule>) -> Statement {
+    let mut inner = pair.into_inner();
+    let name = inner.next().unwrap().as_str().to_string();
+    
+    let fields = if let Some(fields_pair) = inner.next() {
+        fields_pair.into_inner()
+            .map(|field| field.as_str().to_string())
+            .collect()
+    } else {
+        Vec::new()
+    };
+    
+    Statement::StructDecl(StructDef { name, fields })
+}
+
+fn parse_struct_instantiate(pair: Pair<Rule>) -> Expr {
+    let mut inner = pair.into_inner();
+    let name = inner.next().unwrap().as_str().to_string();
+    
+    let fields = if let Some(fields_pair) = inner.next() {
+        fields_pair.into_inner()
+            .map(|field_pair| {
+                let mut field_inner = field_pair.into_inner();
+                let field_name = field_inner.next().unwrap().as_str().to_string();
+                let value = parse_expr(field_inner.next().unwrap());
+                (field_name, value)
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    
+    Expr::StructInstantiate(StructInit { name, fields })
 }
