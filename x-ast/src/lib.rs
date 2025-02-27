@@ -15,7 +15,7 @@ pub enum Operator {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
-    Number(i64),
+    Number(f64),
     String(StringLiteral),
     Identifier(String),
     BinaryOp {
@@ -39,6 +39,11 @@ pub enum Expr {
     Assignment {
         target: Box<Expr>,
         value: Box<Expr>
+    },
+    StructInstantiate(StructInit),
+    FieldAccess {
+        object: Box<Expr>,
+        field: String,
     }
 }
 
@@ -88,6 +93,19 @@ pub enum Statement {
         else_block: Option<Vec<Statement>>,
     },
     WhileLoop { condition: Expr, body: Vec<Statement> },
+    StructDecl(StructDef)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructDef {
+    pub name: String,
+    pub fields: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructInit {
+    pub name: String,
+    pub fields: Vec<(String, Expr)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
