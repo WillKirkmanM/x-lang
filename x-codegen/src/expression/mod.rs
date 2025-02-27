@@ -23,26 +23,33 @@ impl<'ctx> CodeGen<'ctx> {
             }
             Expr::BinaryOp { left, op, right } => {
                 if let Operator::Add = op {
-                    if let Expr::BinaryOp { left: inner_left, op: inner_op, right: inner_right } = left.as_ref() {
+                    if let Expr::BinaryOp {
+                        left: inner_left,
+                        op: inner_op,
+                        right: inner_right,
+                    } = left.as_ref()
+                    {
                         if let Operator::Assign = inner_op {
                             if let Expr::Identifier(name) = inner_left.as_ref() {
                                 if let Expr::Identifier(right_name) = inner_right.as_ref() {
                                     if name == right_name {
                                         if let Some(&ptr) = self.variables.get(name) {
-                                            let var_val = self.builder
+                                            let var_val = self
+                                                .builder
                                                 .build_load(self.context.f64_type(), ptr, name)
                                                 .map_err(|e| e.to_string())?
                                                 .into_float_value();
-                                            
+
                                             let rhs = self.gen_expr(right)?.into_float_value();
-                                            let add_result = self.builder
+                                            let add_result = self
+                                                .builder
                                                 .build_float_add(var_val, rhs, "addtmp")
                                                 .map_err(|e| e.to_string())?;
-                                            
+
                                             self.builder
                                                 .build_store(ptr, add_result)
                                                 .map_err(|e| e.to_string())?;
-                                            
+
                                             return Ok(add_result.into());
                                         }
                                     }
@@ -98,6 +105,103 @@ impl<'ctx> CodeGen<'ctx> {
                                 .map_err(|e| e.to_string())?;
 
                             return Ok(value_val);
+                        }
+                        Expr::FieldAccess { object: _, field: _ } => {
+                            let rhs_val = self.gen_expr(right)?.into_float_value();
+
+                            fn get_base_object_and_field(expr: &Expr) -> Option<(String, String)> {
+                                match expr {
+                                    Expr::FieldAccess { object, field } => {
+                                        match object.as_ref() {
+                                            Expr::Identifier(name) => {
+                                                Some((name.clone(), field.clone()))
+                                            }
+                                            Expr::FieldAccess {
+                                                object: inner_obj,
+                                                field: _,
+                                            } => {
+                                                match inner_obj.as_ref() {
+                                                    Expr::Identifier(name) => {
+                                                        Some((name.clone(), field.clone()))
+                                                    }
+                                                    _ => None,
+                                                }
+                                            }
+                                            _ => None,
+                                        }
+                                    }
+                                    _ => None,
+                                }
+                            }
+
+                            if let Some((obj_name, field_name)) = get_base_object_and_field(left) {
+                                if let Some(&ptr) = self.variables.get(&obj_name) {
+                                    let struct_name = match self.variable_types.get(&obj_name) {
+                                        Some(t) => t.clone(),
+                                        None => {
+                                            return Err(format!(
+                                                "Variable {} is not a struct",
+                                                obj_name
+                                            ))
+                                        }
+                                    };
+
+                                    let (struct_type, field_names) =
+                                        match self.struct_types.get(&struct_name) {
+                                            Some(t) => t,
+                                            None => {
+                                                return Err(format!(
+                                                    "Unknown struct type: {}",
+                                                    struct_name
+                                                ))
+                                            }
+                                        };
+
+                                    let field_index =
+                                        match field_names.iter().position(|f| f == &field_name) {
+                                            Some(idx) => idx as u32,
+                                            None => {
+                                                return Err(format!(
+                                                    "Unknown field '{}' in struct '{}'",
+                                                    field_name, struct_name
+                                                ))
+                                            }
+                                        };
+
+                                    let struct_ptr_val = self
+                                        .builder
+                                        .build_load(
+                                            self.context.ptr_type(AddressSpace::default()),
+                                            ptr,
+                                            "struct_ptr",
+                                        )
+                                        .map_err(|e| e.to_string())?
+                                        .into_pointer_value();
+
+                                    let field_ptr = {
+                                        self.builder
+                                            .build_struct_gep(
+                                                *struct_type,
+                                                struct_ptr_val,
+                                                field_index,
+                                                &format!("{}.{}", obj_name, field_name),
+                                            )
+                                            .map_err(|e| e.to_string())?
+                                    };
+
+                                    self.builder
+                                        .build_store(field_ptr, rhs_val)
+                                        .map_err(|e| e.to_string())?;
+
+                                    return Ok(rhs_val.into());
+                                } else {
+                                    return Err(format!("Unknown variable: {}", obj_name));
+                                }
+                            } else {
+                                return Err(
+                                    "Field assignment requires a valid struct field".to_string()
+                                );
+                            }
                         }
                         _ => return Err("Invalid assignment target".to_string()),
                     }
@@ -186,6 +290,8 @@ impl<'ctx> CodeGen<'ctx> {
             Expr::Array(elements) => self.gen_array(elements),
             Expr::ArrayAccess { array, index } => self.gen_array_access(array, index),
             Expr::Assignment { target, value } => self.gen_assignment(target, value),
+            Expr::StructInstantiate(struct_init) => self.gen_struct_instantiate(struct_init),
+            Expr::FieldAccess { object, field } => self.gen_field_access(object, field),
         }
     }
 
@@ -354,31 +460,30 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(alloca.into())
     }
 
-    fn gen_array_access(
+    pub(crate) fn gen_array_access(
         &mut self,
-        array: &Expr,
-        index: &Expr,
+        array: &Box<Expr>,
+        index: &Box<Expr>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let var_ptr = match array {
-            Expr::Identifier(name) => {
-                if let Some(&ptr) = self.variables.get(name) {
-                    ptr
-                } else {
-                    return Err(format!("Unknown variable: {}", name));
-                }
+        fn get_base_array(expr: &Expr) -> Option<String> {
+            match expr {
+                Expr::Identifier(name) => Some(name.clone()),
+                Expr::ArrayAccess { array, index: _ } => get_base_array(array),
+                _ => None,
             }
-            _ => return Err("Array access only supports identifier arrays for now".to_string()),
+        }
+
+        let array_name = if let Some(name) = get_base_array(array) {
+            name
+        } else {
+            return Err("Array access only supports identifier arrays for now".to_string());
         };
 
-        let array_ptr = self
-            .builder
-            .build_load(
-                self.context.ptr_type(AddressSpace::default()),
-                var_ptr,
-                "array_ptr",
-            )
-            .map_err(|e| e.to_string())?
-            .into_pointer_value();
+        let array_ptr = if let Some(&ptr) = self.variables.get(&array_name) {
+            ptr
+        } else {
+            return Err(format!("Unknown array variable: {}", array_name));
+        };
 
         let index_val = self.gen_expr(index)?.into_float_value();
 
@@ -387,21 +492,29 @@ impl<'ctx> CodeGen<'ctx> {
             .build_float_to_unsigned_int(index_val, self.context.i32_type(), "array_idx")
             .map_err(|e| e.to_string())?;
 
-        let f64_type = self.context.f64_type();
+        let array_ptr_val = self
+            .builder
+            .build_load(
+                self.context.ptr_type(AddressSpace::default()),
+                array_ptr,
+                "array_ptr",
+            )
+            .map_err(|e| e.to_string())?
+            .into_pointer_value();
 
         let gep = unsafe {
             self.builder
                 .build_in_bounds_gep(
-                    f64_type.array_type(100),
-                    array_ptr,
-                    &[self.context.i32_type().const_zero(), index_int],
+                    self.context.f64_type(),
+                    array_ptr_val,
+                    &[index_int],
                     "array_access",
                 )
                 .map_err(|e| e.to_string())?
         };
 
         self.builder
-            .build_load(f64_type, gep, "array_element")
+            .build_load(self.context.f64_type(), gep, "array_element")
             .map_err(|e| e.to_string())
     }
 
@@ -453,5 +566,75 @@ impl<'ctx> CodeGen<'ctx> {
         }
 
         Err("Invalid assignment target".to_string())
+    }
+
+
+
+    pub(crate) fn gen_field_access(
+        &mut self,
+        object: &Box<x_ast::Expr>,
+        field: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        match &**object {
+            x_ast::Expr::Identifier(name) => {
+                if let Some(&ptr) = self.variables.get(name) {
+                    let struct_name = match self.variable_types.get(name) {
+                        Some(t) => t.clone(),
+                        None => return Err(format!("Variable {} is not a struct", name)),
+                    };
+
+                    let (struct_type, field_names) = match self.struct_types.get(&struct_name) {
+                        Some(t) => t,
+                        None => return Err(format!("Unknown struct type: {}", struct_name)),
+                    };
+
+                    let field_index = match field_names.iter().position(|f| f == field) {
+                        Some(idx) => idx as u32,
+                        None => {
+                            return Err(format!(
+                                "Unknown field '{}' in struct '{}'",
+                                field, struct_name
+                            ))
+                        }
+                    };
+
+                    let struct_ptr_val = self
+                        .builder
+                        .build_load(
+                            self.context.ptr_type(AddressSpace::default()),
+                            ptr,
+                            "struct_ptr",
+                        )
+                        .map_err(|e| e.to_string())?
+                        .into_pointer_value();
+
+                    let field_ptr = {
+                        self.builder
+                            .build_struct_gep(
+                                *struct_type,
+                                struct_ptr_val,
+                                field_index,
+                                &format!("{}.{}", name, field),
+                            )
+                            .map_err(|e| e.to_string())?
+                    };
+
+                    self.builder
+                        .build_load(self.context.f64_type(), field_ptr, field)
+                        .map_err(|e| e.to_string())
+                } else {
+                    Err(format!("Unknown variable: {}", name))
+                }
+            }
+            x_ast::Expr::FieldAccess {
+                object: inner_obj,
+                field: _inner_field,
+            } => {
+                self.gen_field_access(inner_obj, field)
+            }
+            _ => Err(
+                "Field access is only supported on identifiers or other field accesses".to_string(),
+            ),
+        }
     }
 }
