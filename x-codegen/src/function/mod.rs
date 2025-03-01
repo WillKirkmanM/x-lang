@@ -66,88 +66,87 @@ impl<'ctx> CodeGen<'ctx> {
         name: &str,
         args: &[Expr],
     ) -> Result<FloatValue<'ctx>, String> {
-        match (name, args.first()) {
-            ("print", Some(Expr::String(string_literal))) => {
-                let printf = self.get_printf_fn()?;
-                let mut fmt_str = String::new();
-                let mut printf_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
+        if name == "print" && args.first().map_or(false, |arg| matches!(arg, Expr::String(_))) {
+            if let Some(Expr::String(string_literal)) = args.first() {
+                return self.gen_print_str(string_literal);
+            }
+        }
 
-                for part in &string_literal.parts {
-                    match part {
-                        StringPart::Text(text) => {
-                            fmt_str.push_str(text);
-                        }
-                        StringPart::Interpolation(expr) => {
-                            fmt_str.push_str("%s");
-                            let val = self.gen_expr(expr)?;
-                            printf_args.push(val.into());
-                        }
+        let f = if let Some(f) = self.functions.get(name) {
+            *f
+        } else if let Some(f) = self.imported_functions.get(name) {
+            *f
+        } else if let Some(f) = self.module.get_function(name) {
+            f
+        } else {
+            return Err(format!(
+                "Unknown function {}, Available Functions: {}",
+                name,
+                self.functions
+                    .keys()
+                    .map(|k| k.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        };
+
+        let mut compiled_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
+        
+        for (i, arg) in args.iter().enumerate() {
+            match arg {
+                Expr::String(string_literal) => {
+                    let s = string_literal.parts.iter()
+                        .map(|p| p.to_string())
+                        .collect::<String>();
+                    
+                    let global_str = self.builder
+                        .build_global_string_ptr(&s, &format!("str_arg_{}", i))
+                        .map_err(|e| e.to_string())?;
+                    
+                    compiled_args.push(global_str.as_pointer_value().into());
+                    
+                    if let Some(param_name) = f.get_nth_param(i as u32)
+                        .map(|p| p.get_name().to_string_lossy().into_owned())
+                    {
+                        self.variable_types.insert(param_name, "string".to_string());
                     }
-                }
-
-                fmt_str.push_str("\n\0");
-                let fmt_ptr = self
-                    .builder
-                    .build_global_string_ptr(&fmt_str, "fmt_str")
-                    .map_err(|e| e.to_string())?;
-
-                let mut call_args = vec![fmt_ptr.as_pointer_value().into()];
-                call_args.extend(printf_args);
-
-                self.builder
-                    .build_call(printf, &call_args, "printf_call")
-                    .map_err(|e| e.to_string())?;
-
-                Ok(self.context.f64_type().const_float(0.0))
-            }
-            ("print", _) => self.gen_print(args),
-            _ => {
-                let f = if let Some(f) = self.functions.get(name) {
-                    *f
-                } else if let Some(f) = self.imported_functions.get(name) {
-                    *f
-                } else if let Some(f) = self.module.get_function(name) {
-                    f
-                } else {
-                    return Err(format!(
-                        "Unknown function {}, Available Functions: {}",
-                        name,
-                        self.functions
-                            .keys()
-                            .map(|k| k.to_string())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ));
-                };
-
-                let expected_args = f.count_params() as usize;
-                if expected_args != args.len() {
-                    return Err(format!(
-                        "Function '{}' expects {} arguments but got {}",
-                        name,
-                        expected_args,
-                        args.len()
-                    ));
-                }
-
-                let compiled_args: Vec<BasicMetadataValueEnum<'ctx>> = args
-                    .iter()
-                    .map(|arg| self.gen_expr(arg))
-                    .collect::<Result<Vec<_>, _>>()?
-                    .into_iter()
-                    .map(|val| val.into())
-                    .collect();
-
-                let call_result = self
-                    .builder
-                    .build_call(f, &compiled_args, "calltmp")
-                    .map_err(|e| e.to_string())?;
-
-                match call_result.try_as_basic_value().left() {
-                    Some(value) => Ok(value.into_float_value()),
-                    None => Ok(self.context.f64_type().const_float(0.0)),
+                },
+                Expr::Identifier(var_name) => {
+                    if let Some(&ptr) = self.variables.get(var_name) {
+                        if self.variable_types.get(var_name).map_or(false, |t| t == "string") {
+                            let val = self.builder
+                                .build_load(self.context.ptr_type(AddressSpace::default()), ptr, var_name)
+                                .map_err(|e| e.to_string())?;
+                            compiled_args.push(val.into());
+                            
+                            if let Some(param_name) = f.get_nth_param(i as u32)
+                                .map(|p| p.get_name().to_string_lossy().into_owned())
+                            {
+                                self.variable_types.insert(param_name, "string".to_string());
+                            }
+                        } else {
+                            let val = self.builder
+                                .build_load(self.context.f64_type(), ptr, var_name)
+                                .map_err(|e| e.to_string())?;
+                            compiled_args.push(val.into());
+                        }
+                    } else {
+                        return Err(format!("Unknown variable: {}", var_name));
+                    }
+                },
+                _ => {
+                    compiled_args.push(self.gen_expr(arg)?.into());
                 }
             }
+        }
+
+        let call_result = self.builder
+            .build_call(f, &compiled_args, "calltmp")
+            .map_err(|e| e.to_string())?;
+
+        match call_result.try_as_basic_value().left() {
+            Some(value) => Ok(value.into_float_value()),
+            None => Ok(self.context.f64_type().const_float(0.0)),
         }
     }
 
@@ -157,16 +156,26 @@ impl<'ctx> CodeGen<'ctx> {
         params: &[String],
         body: &[Statement],
     ) -> Result<FunctionValue<'ctx>, String> {
-        let param_types: Vec<_> = params
+        let mut param_is_string = Vec::with_capacity(params.len());
+        
+        for param in params {
+            let is_string = param == "source" || param == "target" || param == "auxiliary" ||
+                            param.contains("str") || param.contains("name") || 
+                            param.contains("path");
+            param_is_string.push(is_string);
+        }
+        
+        let param_types: Vec<_> = param_is_string
             .iter()
-            .map(|p| {
-                if p == "name" {
+            .map(|&is_string| {
+                if is_string {
                     self.context.ptr_type(AddressSpace::default()).into()
                 } else {
                     self.context.f64_type().into()
                 }
             })
             .collect();
+        
         let fn_type = self.context.f64_type().fn_type(&param_types, false);
         let function = self.module.add_function(name, fn_type, None);
 
@@ -176,7 +185,13 @@ impl<'ctx> CodeGen<'ctx> {
         self.variables.clear();
         for (i, param_name) in params.iter().enumerate() {
             let param = function.get_nth_param(i as u32).unwrap();
-            let ptr = if param_name == "name" {
+            let is_string = param_is_string[i];
+            
+            if is_string {
+                self.variable_types.insert(param_name.clone(), "string".to_string());
+            }
+            
+            let ptr = if is_string {
                 self.builder
                     .build_alloca(self.context.ptr_type(AddressSpace::default()), param_name)
                     .map_err(|e| e.to_string())?
@@ -185,6 +200,7 @@ impl<'ctx> CodeGen<'ctx> {
                     .build_alloca(self.context.f64_type(), param_name)
                     .map_err(|e| e.to_string())?
             };
+            
             self.builder
                 .build_store(ptr, param)
                 .map_err(|e| e.to_string())?;
