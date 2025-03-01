@@ -332,75 +332,94 @@ impl<'ctx> CodeGen<'ctx> {
         let printf = self.get_printf_fn()?;
         let mut fmt_str = String::new();
         let mut args: Vec<BasicValueEnum<'ctx>> = Vec::new();
-
+    
         for part in &string.parts {
             match part {
                 StringPart::Text(text) => {
                     let escaped = text.replace("%", "%%");
                     fmt_str.push_str(&escaped);
                 }
-                StringPart::Interpolation(expr) => match expr.as_ref() {
-                    Expr::String(str_lit) => {
-                        fmt_str.push_str("%s");
-                        let str_val = self
-                            .builder
-                            .build_global_string_ptr(&str_lit.parts[0].to_string(), "str_const")
-                            .map_err(|e| e.to_string())?;
-                        args.push(str_val.as_pointer_value().into());
-                    }
-                    Expr::Identifier(name) => {
-                        if let Some(ptr) = self.variables.get(name) {
-                            if name == "name" {
-                                fmt_str.push_str("%s");
-                                let val = self
-                                    .builder
-                                    .build_load(
-                                        self.context.ptr_type(AddressSpace::default()),
-                                        *ptr,
-                                        name,
-                                    )
-                                    .map_err(|e| e.to_string())?;
-                                args.push(val);
+                StringPart::Interpolation(expr) => {
+                    match expr.as_ref() {
+                        Expr::String(str_lit) => {
+                            fmt_str.push_str("%s");
+                            let full_string = str_lit.parts.iter()
+                                .map(|p| p.to_string())
+                                .collect::<String>();
+                            
+                            let str_val = self.builder
+                                .build_global_string_ptr(&full_string, "str_const")
+                                .map_err(|e| e.to_string())?;
+                            args.push(str_val.as_pointer_value().into());
+                        }
+                        Expr::Number(n) => {
+                            fmt_str.push_str("%g");
+                            args.push(self.context.f64_type().const_float(*n).into());
+                        }
+                        Expr::Identifier(name) => {
+                            if let Some(ptr) = self.variables.get(name) {
+                                if self.variable_types.get(name).map_or(false, |t| t == "string") {
+                                    fmt_str.push_str("%s");
+                                    
+                                    let val = self.builder
+                                        .build_load(
+                                            self.context.ptr_type(AddressSpace::default()),
+                                            *ptr,
+                                            name,
+                                        )
+                                        .map_err(|e| e.to_string())?;
+                                    args.push(val);
+                                } else {
+                                    fmt_str.push_str("%g");
+                                    let val = self.builder
+                                        .build_load(self.context.f64_type(), *ptr, name)
+                                        .map_err(|e| e.to_string())?;
+                                    args.push(val);
+                                }
                             } else {
-                                fmt_str.push_str("%f");
-                                let val = self
-                                    .builder
-                                    .build_load(self.context.f64_type(), *ptr, name)
-                                    .map_err(|e| e.to_string())?;
-                                args.push(val);
+                                return Err(format!("Undefined variable in interpolation: {}", name));
                             }
-                        } else {
-                            return Err(format!("Undefined variable in interpolation: {}", name));
+                        }
+                        _ => {
+                            if self.is_string_expression(expr)? {
+                                fmt_str.push_str("%s");
+                            } else {
+                                fmt_str.push_str("%g");
+                            }
+                            let val = self.gen_expr(expr)?;
+                            args.push(val);
                         }
                     }
-                    _ => {
-                        fmt_str.push_str("%f");
-                        let val = self.gen_expr(expr)?;
-                        args.push(val);
-                    }
-                },
+                }
             }
         }
-
+    
         fmt_str.push_str("\n\0");
-
+    
         let fmt_ptr = self
             .builder
             .build_global_string_ptr(&fmt_str, "fmt_str")
             .map_err(|e| e.to_string())?;
-
+    
         let mut printf_args: Vec<BasicMetadataValueEnum<'ctx>> =
             vec![fmt_ptr.as_pointer_value().into()];
-        printf_args.extend(
-            args.iter()
-                .map(|&arg| -> BasicMetadataValueEnum<'ctx> { arg.into() }),
-        );
-
+        printf_args.extend(args.iter().map(|arg| BasicMetadataValueEnum::from(*arg)));
+    
         self.builder
             .build_call(printf, &printf_args, "printf_call")
             .map_err(|e| e.to_string())?;
-
+    
         Ok(self.context.f64_type().const_float(0.0))
+    }
+
+    pub fn is_string_expression(&self, expr: &Expr) -> Result<bool, String> {
+        match expr {
+            Expr::String(_) => Ok(true),
+            Expr::Identifier(name) => {
+                Ok(self.variable_types.get(name).map_or(false, |t| t == "string"))
+            }
+            _ => Ok(false)
+        }
     }
 
     pub fn gen_print(&mut self, args: &[Expr]) -> Result<FloatValue<'ctx>, String> {
