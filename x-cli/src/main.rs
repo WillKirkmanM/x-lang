@@ -1,180 +1,149 @@
 use std::process::Command;
-
+use std::fs;
+use clap::{Parser, Subcommand};
 use inkwell::context::Context;
 use x_codegen::CodeGen;
 use x_parser::parse;
 
-fn main() {
-    let input = r#"
-    import std::print;
+#[derive(Parser)]
+#[command(name = "x")]
+#[command(about = "X Programming Language CLI", long_about = None)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Run the source file using JIT execution
+    Run {
+        /// Source file to run
+        file: String,
+    },
+    /// Build the source file into an executable
+    Build {
+        /// Source file to compile
+        file: String,
+    },
+    /// Build and run the executable
+    BuildAndRun {
+        /// Source file to compile and run
+        file: String,
+    },
+}
+
+fn run_jit(source: &str) -> Result<(), String> {
+    let program = parse(source).map_err(|e| format!("Parse error: {}", e))?;
     
-    fn add(x, y) {
-        x + y;
-    }
-    
-    fn multiply(x, y) {
-        x * y; // Return the Product of x and y
-    }
-
-    fn greet() {
-
-        let a = 3;
-        let b = 4;
-        let c = a + b; // Return the Sum of a and b
-
-        print(c);
-
-        print("1");
-        print("2");
-        print("3");
-
-        print("Hello, World!");
-    }
-
-    // hi
-    greet();
-
-    for n in 7..19 {
-        print(n);
-    }
-
-    fn test_comparisons(x, y) {
-        if x < y {
-            print("x is less than y");
-        }
-        if x <= y {
-            print("x is less than or equal to y");
-        }
-        if x > y {
-            print("x is greater than y");
-        }
-        if x >= y {
-            print("x is greater than or equal to y");
-        }
-        if x == y {
-            print("x is equal to y");
-        }
-        if x != y {
-            print("x is not equal to y");
-        }
-    }
-
-    test_comparisons(5, 10);
-    test_comparisons(10, 10);
-    test_comparisons(15, 10);
-
-    fn say_hello(name) {
-        print("Hi {name}!");
-    }
-    
-    say_hello("world");
-    say_hello("moon");
-
-    let result1 = add(3, 4);
-    print("The result of 3 + 4 is: {result1}.");
-    print(result1);
-
-    let result2 = multiply(3, 4);
-    print("The result of 3 * 4 is:");
-    print(result2);
-
-    let mul = |x, y| { x * y };
-    let div = |x, y| { x / y };
-
-    print("The result of the multiply closure is:");
-    print(mul(4, 1));
-
-    print("The result of the divide closure is:");
-    print(div(7, 1));
-
-    let arr = [1, 2, 3, 4, 5];
-
-    let two = arr[1];
-    print(two);
-
-    let i = 0;
-    while i < 5 {
-        print(i);
-        i = i + 1;
-    }
-
-    struct Point {
-        x,
-        y
-    }
-
-    let p = Point{ x: 10.0, y: 20.0 };
-    print("Point coordinates:");
-    print(p.x);
-    print(p.y);
-    
-    p.x = 30.0;
-    print("Updated X coordinate:");
-    print(p.x);
-
-    "#;
-    let program = match parse(input) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("Parse error: {}", e);
-            return;
-        }
-    };
-
-    println!("AST: {:?}", program);
-
     let context = Context::create();
     let mut codegen = CodeGen::new(&context, "main");
+    
+    codegen.generate(program)?;
+    println!("Generated LLVM IR:");
+    println!("{}", codegen.get_ir());
+    
+    codegen.jit_execute()?;
+    Ok(())
+}
 
-    match codegen.generate(program.clone()) {
-        Ok(_) => {
-            println!("Generated LLVM IR:");
-            println!("{}", codegen.get_ir());
+fn build(source: &str, output: &str) -> Result<(), String> {
+    let program = parse(source).map_err(|e| format!("Parse error: {}", e))?;
+    
+    let context = Context::create();
+    let mut codegen = CodeGen::new(&context, "main");
+    
+    codegen.generate(program)?;
+    
+    fs::write("output.ll", codegen.get_ir())
+        .map_err(|e| format!("Failed to write IR: {}", e))?;
 
-            match codegen.jit_execute() {
-                Ok(_result) => (),
-                Err(e) => {
-                    eprintln!("Execution error: {}", e);
-                }
-            }
-        }
-        Err(e) => eprintln!("Codegen error: {}", e),
+    let status = Command::new("llc")
+        .args([
+            "-opaque-pointers",
+            "-filetype=obj",
+            "-relocation-model=pic",
+            "output.ll",
+            "-o",
+            "output.o"
+        ])
+        .status()
+        .map_err(|e| format!("Failed to run llc: {}", e))?;
+    
+    if !status.success() {
+        return Err("llc failed".to_string());
     }
 
-    // match codegen.generate(program) {
-    //     Ok(_) => {
-    //         println!("Generated LLVM IR:");
-    //         println!("{}", codegen.get_ir());
+    let status = Command::new("clang")
+        .args([
+            "output.o",
+            "-o",
+            output,
+            "-fPIE",
+            "-pie",
+            "-lm"
+        ])
+        .status()
+        .map_err(|e| format!("Failed to run clang: {}", e))?;
+    
+    if !status.success() {
+        return Err("linking failed".to_string());
+    }
 
-    //         std::fs::write("output.ll", codegen.get_ir()).expect("Failed to write IR");
+    fs::remove_file("output.ll").ok();
+    fs::remove_file("output.o").ok();
+    
+    Ok(())
+}
 
-    //         Command::new("llc")
-    //             .args([
-    //                 "-opaque-pointers",
-    //                 "-filetype=obj",
-    //                 "-relocation-model=pic",
-    //                 "output.ll",
-    //                 "-o",
-    //                 "output.o"
-    //             ])
-    //             .status()
-    //             .expect("Failed to run llc");
+fn main() {
+    let cli = Cli::parse();
 
-    //         Command::new("clang")
-    //             .args([
-    //                 "output.o",
-    //                 "-o",
-    //                 "program",
-    //                 "-fPIE",
-    //                 "-pie",
-    //                 "-lm"
-    //             ])
-    //             .status()
-    //             .expect("Failed to link");
-
-    //         std::fs::remove_file("output.ll").ok();
-    //         std::fs::remove_file("output.o").ok();
-    //     },
-    //     Err(e) => eprintln!("Codegen error: {}", e)
-    // }
+    match &cli.command {
+        Commands::Run { file } => {
+            match fs::read_to_string(file) {
+                Ok(source) => {
+                    if let Err(e) = run_jit(&source) {
+                        eprintln!("Error: {}", e);
+                    }
+                }
+                Err(e) => eprintln!("Error reading file: {}", e),
+            }
+        }
+        Commands::Build { file } => {
+            match fs::read_to_string(file) {
+                Ok(source) => {
+                    let output = file.trim_end_matches(".x");
+                    if let Err(e) = build(&source, output) {
+                        eprintln!("Error: {}", e);
+                    }
+                }
+                Err(e) => eprintln!("Error reading file: {}", e),
+            }
+        }
+        Commands::BuildAndRun { file } => {
+            match fs::read_to_string(file) {
+                Ok(source) => {
+                    let output = file.trim_end_matches(".x");
+                    if let Err(e) = build(&source, output) {
+                        eprintln!("Error: {}", e);
+                        return;
+                    }
+                    
+                    let status = Command::new(format!("./{}", output))
+                        .status()
+                        .unwrap_or_else(|e| {
+                            eprintln!("Failed to run program: {}", e);
+                            std::process::exit(1);
+                        });
+                    
+                    fs::remove_file(output).ok();
+                    
+                    if !status.success() {
+                        eprintln!("Program exited with error");
+                    }
+                }
+                Err(e) => eprintln!("Error reading file: {}", e),
+            }
+        }
+    }
 }
