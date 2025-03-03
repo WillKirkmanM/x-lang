@@ -2,7 +2,7 @@ WHITESPACE = _{ " " | "\t" | "\r" | "\n" | COMMENT }
 COMMENT = _{ "//" ~ (!NEWLINE ~ ANY)* ~ NEWLINE }
 
 program = { SOI ~ statement* ~ EOI }
-statement = { struct_decl | if_stmt | for_loop | while_loop | function_def | (var_decl | import | expr) ~ ";" }
+statement = { struct_decl | if_stmt | for_loop | while_loop | function_def | return_stmt | (var_decl | import | expr) ~ ";" }
 
 function_def = { "fn" ~ identifier ~ "(" ~ params? ~ ")" ~ block }
 params = { identifier ~ ("," ~ identifier)* }
@@ -36,6 +36,8 @@ struct_fields = { identifier ~ ("," ~ identifier)* }
 struct_instantiate = { identifier ~ "{" ~ struct_init_fields? ~ "}" }
 struct_init_fields = { struct_init_field ~ ("," ~ struct_init_field)* }
 struct_init_field = { identifier ~ ":" ~ expr }
+
+return_stmt = { "return" ~ expr? ~ ";" }
 
 operator = _{ eq_op | neq_op | le_op | ge_op | lt_op | gt_op | add_op | sub_op | mul_op | div_op | assign_op }
 eq_op = { "==" }
