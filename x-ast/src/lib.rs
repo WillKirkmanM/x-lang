@@ -93,7 +93,8 @@ pub enum Statement {
         else_block: Option<Vec<Statement>>,
     },
     WhileLoop { condition: Expr, body: Vec<Statement> },
-    StructDecl(StructDef)
+    StructDecl(StructDef),
+    Return { value: Option<Expr> },
 }
 
 #[derive(Debug, Clone, PartialEq)]
