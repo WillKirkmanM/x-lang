@@ -263,6 +263,7 @@ fn parse_statement(pair: Pair<Rule>) -> Statement {
                 Rule::function_def => parse_function_def(inner),
                 Rule::struct_decl => parse_struct_decl(inner),
                 Rule::COMMENT => Statement::Comment(inner.as_str().trim_start_matches("//").trim().to_string()),
+                Rule::return_stmt => parse_return_statement(inner),
                 _ => unreachable!("Unexpected rule in statement: {:?}", inner.as_rule())
             }
         },
@@ -327,6 +328,17 @@ fn parse_block(pair: Pair<Rule>) -> Statement {
     }
     
     Statement::Block { statements }
+}
+
+fn parse_return_statement(pair: Pair<Rule>) -> Statement {
+    let mut inner = pair.into_inner();
+    let value = if let Some(expr_pair) = inner.next() {
+        Some(parse_expr(expr_pair))
+    } else {
+        None
+    };
+    
+    Statement::Return { value }
 }
 
 fn parse_string(pair: Pair<Rule>) -> Expr {
