@@ -45,23 +45,39 @@ impl<'ctx> CodeGen<'ctx> {
                 then_val = Some(val);
             }
         }
+
+        let then_val = then_val.unwrap_or_else(|| self.context.f64_type().const_float(0.0));
+        let then_end_bb = self.builder.get_insert_block().unwrap();
         self.builder.build_unconditional_branch(merge_bb)
             .map_err(|e| e.to_string())?;
         
-        let mut else_val = None;
+        let mut else_val = self.context.f64_type().const_float(0.0);
+        let mut else_end_bb = None;
         if let Some(else_stmts) = else_block {
             self.builder.position_at_end(else_bb.unwrap());
             for stmt in else_stmts {
                 if let Some(val) = self.gen_statement(stmt)? {
-                    else_val = Some(val);
+                    else_val = val;
                 }
             }
+            else_end_bb = Some(self.builder.get_insert_block().unwrap());
             self.builder.build_unconditional_branch(merge_bb)
                 .map_err(|e| e.to_string())?;
         }
         
         self.builder.position_at_end(merge_bb);
         
-        Ok(then_val.or(else_val))
+        let phi = self.builder.build_phi(self.context.f64_type(), "ifresult")
+            .map_err(|e| e.to_string())?;
+        
+        phi.add_incoming(&[(&then_val, then_end_bb)]);
+        
+        if let Some(else_end) = else_end_bb {
+            phi.add_incoming(&[(&else_val, else_end)]);
+        } else if else_block.is_none() {
+            phi.add_incoming(&[(&self.context.f64_type().const_float(0.0), parent)]);
+        }
+        
+        Ok(Some(phi.as_basic_value().into_float_value()))
     }
 }
