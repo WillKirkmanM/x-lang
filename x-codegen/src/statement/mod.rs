@@ -65,6 +65,23 @@ impl<'ctx> CodeGen<'ctx> {
                 self.gen_struct_decl(struct_def)?;
                 Ok(None)
             },
+            Statement::Return { value } => {
+                let return_val = if let Some(expr) = value {
+                    self.gen_expr(expr)?.into_float_value()
+                } else {
+                    self.context.f64_type().const_float(0.0)
+                };
+                
+                self.builder
+                    .build_return(Some(&return_val))
+                    .map_err(|e| e.to_string())?;
+                    
+                let function = self.builder.get_insert_block().unwrap().get_parent().unwrap();
+                let unreachable_block = self.context.append_basic_block(function, "after_return");
+                self.builder.position_at_end(unreachable_block);
+                
+                Ok(None)
+            },
         }
     }
 }
