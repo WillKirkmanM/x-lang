@@ -4,7 +4,7 @@ fn abs(x) {
     if x < 0 {
         return -x;
     }
-    x;
+    return x;
 }
 
 fn sqrt_newton(n) {
@@ -20,7 +20,8 @@ fn sqrt_newton(n) {
     let epsilon = 0.00001; 
     
     while abs(x * x - n) > epsilon {
-        x = (x + n / x) / 2;
+        let temp = x + n / x;
+        x = (temp / 2);
     }
     
     x;
