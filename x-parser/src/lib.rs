@@ -1,4 +1,4 @@
-use x_ast::{Expr, Operator, Program, Statement, StringLiteral, StringPart, StructDef, StructInit};
+use x_ast::{Expr, Operator, Program, Statement, StringLiteral, StringPart, StructDef, StructInit, UnaryOperator};
 use pest::{Parser, iterators::Pair};
 use pest_derive::Parser;
 use pest::pratt_parser::{PrattParser, Assoc, Op};
@@ -67,6 +67,86 @@ fn parse_term(pair: Pair<Rule>) -> Expr {
         Rule::anonymous_fn => parse_anonymous_fn(pair.clone()),
         Rule::array_literal => parse_array_literal(pair.clone()),
         Rule::struct_instantiate => parse_struct_instantiate(pair.clone()),
+        Rule::prefix_op => {
+            let mut inner = pair.clone().into_inner();
+            let op_rule = inner.next().unwrap();
+            let expr_pair = inner.next().unwrap();
+            
+            match op_rule.as_rule() {
+                Rule::neg_op => {
+                    Expr::UnaryOp { 
+                        op: UnaryOperator::Negate, 
+                        expr: Box::new(parse_term(expr_pair)) 
+                    }
+                },
+                Rule::not_op => {
+                    Expr::UnaryOp { 
+                        op: UnaryOperator::LogicalNot, 
+                        expr: Box::new(parse_term(expr_pair)) 
+                    }
+                },
+                Rule::bit_not_op => {
+                    Expr::UnaryOp { 
+                        op: UnaryOperator::BitwiseNot, 
+                        expr: Box::new(parse_term(expr_pair)) 
+                    }
+                },
+                Rule::pre_inc_op => {
+                    Expr::UnaryOp { 
+                        op: UnaryOperator::PreIncrement, 
+                        expr: Box::new(parse_term(expr_pair)) 
+                    }
+                },
+                Rule::pre_dec_op => {
+                    Expr::UnaryOp { 
+                        op: UnaryOperator::PreDecrement, 
+                        expr: Box::new(parse_term(expr_pair)) 
+                    }
+                },
+                _ => unreachable!("Unknown prefix operator rule: {:?}", op_rule.as_rule()),
+            }
+        },
+        Rule::postfix_op => {
+            let mut inner = pair.clone().into_inner();
+            let term = parse_term(inner.next().unwrap());
+            let op_rule = inner.next().unwrap();
+            
+            match op_rule.as_rule() {
+                Rule::post_inc_op => {
+                    Expr::UnaryOp { 
+                        op: UnaryOperator::PostIncrement, 
+                        expr: Box::new(term) 
+                    }
+                },
+                Rule::post_dec_op => {
+                    Expr::UnaryOp { 
+                        op: UnaryOperator::PostDecrement, 
+                        expr: Box::new(term) 
+                    }
+                },
+                Rule::postfix => {
+                    let inner_postfix = op_rule.into_inner().next().unwrap();
+                    match inner_postfix.as_rule() {
+                        Rule::expr => {
+                            let index = parse_expr(inner_postfix);
+                            Expr::ArrayAccess {
+                                array: Box::new(term),
+                                index: Box::new(index),
+                            }
+                        },
+                        Rule::identifier => {
+                            let field = inner_postfix.as_str().to_string();
+                            Expr::FieldAccess {
+                                object: Box::new(term),
+                                field,
+                            }
+                        },
+                        _ => unreachable!("Unexpected rule in postfix: {:?}", inner_postfix.as_rule()),
+                    }
+                },
+                _ => unreachable!("Unknown postfix operator rule: {:?}", op_rule.as_rule()),
+            }
+        },
         _ => unreachable!("Unexpected rule in term: {:?}", pair.as_rule()),
     };
     
@@ -129,7 +209,7 @@ fn parse_function_call(pair: Pair<Rule>) -> Expr {
     
     let args = if let Some(args_pair) = inner.next() {
         args_pair.into_inner()
-            .map(|arg| parse_expr(arg))
+            .map(|arg_pair| parse_expr(arg_pair))
             .collect()
     } else {
         Vec::new()
@@ -140,6 +220,8 @@ fn parse_function_call(pair: Pair<Rule>) -> Expr {
 
 fn parse_expr(pair: Pair<Rule>) -> Expr {
     let pratt = PrattParser::new()
+        .op(Op::infix(Rule::or_op, Assoc::Left))
+        .op(Op::infix(Rule::and_op, Assoc::Left))
         .op(Op::infix(Rule::eq_op, Assoc::Left) | Op::infix(Rule::neq_op, Assoc::Left))
         .op(Op::infix(Rule::lt_op, Assoc::Left) | 
             Op::infix(Rule::gt_op, Assoc::Left) | 
@@ -148,7 +230,6 @@ fn parse_expr(pair: Pair<Rule>) -> Expr {
         .op(Op::infix(Rule::add_op, Assoc::Left) | Op::infix(Rule::sub_op, Assoc::Left))
         .op(Op::infix(Rule::mul_op, Assoc::Left) | Op::infix(Rule::div_op, Assoc::Left))
         .op(Op::infix(Rule::assign_op, Assoc::Right));
-
     pratt.map_primary(|pair| {
         match pair.as_rule() {
             Rule::term => parse_term(pair),
@@ -168,6 +249,8 @@ fn parse_expr(pair: Pair<Rule>) -> Expr {
             Rule::eq_op => Operator::Equal,
             Rule::neq_op => Operator::NotEqual,
             Rule::assign_op => Operator::Assign,
+            Rule::or_op => Operator::Or,
+            Rule::and_op => Operator::And,
             _ => unreachable!("Unknown operator rule: {:?}", op.as_rule()),
         };
         
@@ -181,8 +264,6 @@ fn parse_expr(pair: Pair<Rule>) -> Expr {
 }
 
 pub fn parse(input: &str) -> Result<Program, String> {
-    println!("Parsing input: {}", input);
-    
     let pairs = XParser::parse(Rule::program, input)
         .map_err(|e| {
             println!("Parsing error: {}", e);
@@ -332,11 +413,7 @@ fn parse_block(pair: Pair<Rule>) -> Statement {
 
 fn parse_return_statement(pair: Pair<Rule>) -> Statement {
     let mut inner = pair.into_inner();
-    let value = if let Some(expr_pair) = inner.next() {
-        Some(parse_expr(expr_pair))
-    } else {
-        None
-    };
+    let value = inner.next().map(|expr_pair| parse_expr(expr_pair));
     
     Statement::Return { value }
 }
@@ -374,7 +451,7 @@ fn parse_string(pair: Pair<Rule>) -> Expr {
     if !current_text.is_empty() {
         parts.push(StringPart::Text(current_text));
     }
-    
+
     Expr::String(StringLiteral { parts })
 }
 
