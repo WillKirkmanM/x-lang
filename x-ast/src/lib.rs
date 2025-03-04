@@ -11,6 +11,8 @@ pub enum Operator {
     Equal,
     NotEqual,
     Assign,
+    Or,
+    And,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -44,6 +46,10 @@ pub enum Expr {
     FieldAccess {
         object: Box<Expr>,
         field: String,
+    },
+    UnaryOp {
+        op: UnaryOperator,
+        expr: Box<Expr>
     }
 }
 
@@ -112,4 +118,15 @@ pub struct StructInit {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
     pub statements: Vec<Statement>
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum UnaryOperator {
+    Negate,
+    LogicalNot,
+    BitwiseNot,
+    PreIncrement,
+    PreDecrement,
+    PostIncrement,
+    PostDecrement,
 }
