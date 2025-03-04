@@ -20,11 +20,38 @@ while_loop = { "while" ~ expr ~ block }
 
 expr = { term ~ (operator ~ term)* }
 
-primary = { struct_instantiate | function_call | number | identifier | anonymous_fn | string | array_literal | "(" ~ expr ~ ")" }
-term = { primary ~ postfix* }
+term = { 
+    anonymous_fn | 
+    prefix_op | 
+    postfix_op |
+    primary
+}
+
+primary = { 
+    number | 
+    function_call |
+    struct_instantiate |
+    identifier | 
+    "(" ~ expr ~ ")" | 
+    string | 
+    array_literal
+}
+
+prefix_op = { neg_op ~ term | not_op ~ term | bit_not_op ~ term | pre_inc_op ~ term | pre_dec_op ~ term }
+postfix_op = { primary ~ (post_inc_op | post_dec_op | postfix)+ }
+
 postfix = { "[" ~ expr ~ "]" | "." ~ identifier }
 
+neg_op = { "-" }
+not_op = { "!" } 
+bit_not_op = { "~" }
+pre_inc_op = { "++" }
+pre_dec_op = { "--" }
+post_inc_op = { "++" }
+post_dec_op = { "--" }
+
 anonymous_fn = { "|" ~ params? ~ "|" ~ block }
+
 function_call = { identifier ~ "(" ~ args? ~ ")" }
 args = { expr ~ ("," ~ expr)* }
 
@@ -39,7 +66,9 @@ struct_init_field = { identifier ~ ":" ~ expr }
 
 return_stmt = { "return" ~ expr? ~ ";" }
 
-operator = _{ eq_op | neq_op | le_op | ge_op | lt_op | gt_op | add_op | sub_op | mul_op | div_op | assign_op }
+operator = _{ or_op | and_op | eq_op | neq_op | le_op | ge_op | lt_op | gt_op | add_op | sub_op | mul_op | div_op | assign_op }
+or_op = { "||" }
+and_op = { "&&" }
 eq_op = { "==" }
 neq_op = { "!=" }
 le_op = { "<=" }
