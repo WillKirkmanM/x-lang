@@ -4,7 +4,7 @@ use inkwell::{
     values::{BasicMetadataValueEnum, BasicValueEnum, FloatValue, FunctionValue},
     AddressSpace, FloatPredicate,
 };
-use x_ast::{Expr, Operator, StringLiteral, StringPart};
+use x_ast::{Expr, Operator, StringLiteral, StringPart, UnaryOperator};
 
 impl<'ctx> CodeGen<'ctx> {
     pub(crate) fn gen_expr(&mut self, expr: &Expr) -> Result<BasicValueEnum<'ctx>, String> {
@@ -235,6 +235,100 @@ impl<'ctx> CodeGen<'ctx> {
                     }
                     Operator::Equal => self.gen_comparison(FloatPredicate::OEQ, lhs, rhs),
                     Operator::NotEqual => self.gen_comparison(FloatPredicate::ONE, lhs, rhs),
+                    Operator::Or => {
+                        let entry_block = self.builder.get_insert_block().unwrap();
+                        let function = entry_block.get_parent().unwrap();
+                        let rhs_block = self.context.append_basic_block(function, "or_rhs");
+                        let merge_block = self.context.append_basic_block(function, "or_merge");
+                        
+                        let lhs_bool = self.builder
+                            .build_float_compare(
+                                FloatPredicate::ONE, 
+                                lhs,
+                                self.context.f64_type().const_float(0.0),
+                                "lhs_bool"
+                            )
+                            .map_err(|e| e.to_string())?;
+                            
+                        self.builder
+                            .build_conditional_branch(lhs_bool, merge_block, rhs_block)
+                            .map_err(|e| e.to_string())?;
+                            
+                        self.builder.position_at_end(rhs_block);
+                        let rhs_val = self.gen_expr(right)?.into_float_value();
+                        let rhs_bool = self.builder
+                            .build_float_compare(
+                                FloatPredicate::ONE, 
+                                rhs_val,
+                                self.context.f64_type().const_float(0.0),
+                                "rhs_bool"
+                            )
+                            .map_err(|e| e.to_string())?;
+                        let rhs_end = self.builder.get_insert_block().unwrap();
+                        self.builder.build_unconditional_branch(merge_block)
+                            .map_err(|e| e.to_string())?;
+                            
+                        self.builder.position_at_end(merge_block);
+                        let phi = self.builder.build_phi(self.context.bool_type(), "or_result")
+                            .map_err(|e| e.to_string())?;
+                        phi.add_incoming(&[
+                            (&self.context.bool_type().const_int(1, false), entry_block),
+                            (&rhs_bool, rhs_end)
+                        ]);
+                        
+                        self.builder
+                            .build_unsigned_int_to_float(phi.as_basic_value().into_int_value(), 
+                                                       self.context.f64_type(), 
+                                                       "bool_to_float")
+                            .map_err(|e| e.to_string())
+                    },
+                    Operator::And => {
+                        let entry_block = self.builder.get_insert_block().unwrap();
+                        let function = entry_block.get_parent().unwrap();
+                        let rhs_block = self.context.append_basic_block(function, "and_rhs");
+                        let merge_block = self.context.append_basic_block(function, "and_merge");
+                        
+                        let lhs_bool = self.builder
+                            .build_float_compare(
+                                FloatPredicate::ONE, 
+                                lhs,
+                                self.context.f64_type().const_float(0.0),
+                                "lhs_bool"
+                            )
+                            .map_err(|e| e.to_string())?;
+                            
+                        self.builder
+                            .build_conditional_branch(lhs_bool, rhs_block, merge_block)
+                            .map_err(|e| e.to_string())?;
+                            
+                        self.builder.position_at_end(rhs_block);
+                        let rhs_val = self.gen_expr(right)?.into_float_value();
+                        let rhs_bool = self.builder
+                            .build_float_compare(
+                                FloatPredicate::ONE, 
+                                rhs_val,
+                                self.context.f64_type().const_float(0.0),
+                                "rhs_bool"
+                            )
+                            .map_err(|e| e.to_string())?;
+                        let rhs_end = self.builder.get_insert_block().unwrap();
+                        self.builder.build_unconditional_branch(merge_block)
+                            .map_err(|e| e.to_string())?;
+                            
+                        self.builder.position_at_end(merge_block);
+                        let phi = self.builder.build_phi(self.context.bool_type(), "and_result")
+                            .map_err(|e| e.to_string())?;
+                        phi.add_incoming(&[
+                            (&self.context.bool_type().const_int(0, false), entry_block),
+                            (&rhs_bool, rhs_end)
+                        ]);
+                        
+                        self.builder
+                            .build_unsigned_int_to_float(phi.as_basic_value().into_int_value(), 
+                                                       self.context.f64_type(), 
+                                                       "bool_to_float")
+                            .map_err(|e| e.to_string())
+                    },
                     Operator::Assign => unreachable!("Assignment should have been handled already"),
                 }?;
 
@@ -264,7 +358,6 @@ impl<'ctx> CodeGen<'ctx> {
             }
             Expr::AnonymousFunction { params, body } => {
                 let lambda_name = format!("lambda_{}", self.get_unique_id());
-
                 let function = self.compile_anonymous_function(params, body, &lambda_name)?;
 
                 if let Some(binding_name) = self.current_binding_name.as_ref() {
@@ -292,6 +385,49 @@ impl<'ctx> CodeGen<'ctx> {
             Expr::Assignment { target, value } => self.gen_assignment(target, value),
             Expr::StructInstantiate(struct_init) => self.gen_struct_instantiate(struct_init),
             Expr::FieldAccess { object, field } => self.gen_field_access(object, field),
+            Expr::UnaryOp { op, expr } => {
+                match op {
+                    UnaryOperator::Negate => {
+                        let val = self.gen_expr(expr)?.into_float_value();
+                        Ok(self.builder
+                            .build_float_neg(val, "negtmp")
+                            .map_err(|e| e.to_string())?
+                            .into())
+                    },
+                    UnaryOperator::LogicalNot => {
+                        let val = self.gen_expr(expr)?.into_float_value();
+                        let is_zero = self.builder
+                            .build_float_compare(
+                                FloatPredicate::OEQ, 
+                                val, 
+                                self.context.f64_type().const_float(0.0), 
+                                "is_zero"
+                            )
+                            .map_err(|e| e.to_string())?;
+                        Ok(self.builder
+                            .build_unsigned_int_to_float(is_zero, self.context.f64_type(), "bool_to_float")
+                            .map_err(|e| e.to_string())?
+                            .into())
+                    },
+                    UnaryOperator::BitwiseNot => {
+                        let val = self.gen_expr(expr)?.into_float_value();
+                        let int_val = self.builder
+                            .build_float_to_signed_int(val, self.context.i64_type(), "float_to_int")
+                            .map_err(|e| e.to_string())?;
+                        let not_val = self.builder
+                            .build_not(int_val, "bitnottmp")
+                            .map_err(|e| e.to_string())?;
+                        Ok(self.builder
+                            .build_signed_int_to_float(not_val, self.context.f64_type(), "int_to_float")
+                            .map_err(|e| e.to_string())?
+                            .into())
+                    },
+                    UnaryOperator::PreIncrement => self.gen_increment(expr, true, true),
+                    UnaryOperator::PreDecrement => self.gen_increment(expr, true, false),
+                    UnaryOperator::PostIncrement => self.gen_increment(expr, false, true),
+                    UnaryOperator::PostDecrement => self.gen_increment(expr, false, false),
+                }
+            },
         }
     }
 
@@ -654,6 +790,35 @@ impl<'ctx> CodeGen<'ctx> {
             _ => Err(
                 "Field access is only supported on identifiers or other field accesses".to_string(),
             ),
+        }
+    }
+
+    fn gen_increment(&mut self, expr: &Expr, is_pre: bool, is_increment: bool) -> Result<BasicValueEnum<'ctx>, String> {
+        
+        if let Expr::Identifier(name) = expr {
+            if let Some(&alloca) = self.variables.get(name) {
+                let current_val = self.builder
+                    .build_load(self.context.f64_type(), alloca, name)
+                    .map_err(|e| e.to_string())?
+                    .into_float_value();
+                
+                let one = self.context.f64_type().const_float(1.0);
+                let new_val = if is_increment {
+                    self.builder.build_float_add(current_val, one, "inc_tmp")
+                } else {
+                    self.builder.build_float_sub(current_val, one, "dec_tmp")
+                }.map_err(|e| e.to_string())?;
+                
+                self.builder
+                    .build_store(alloca, new_val)
+                    .map_err(|e| e.to_string())?;
+                
+                Ok(if is_pre { new_val.into() } else { current_val.into() })
+            } else {
+                Err(format!("Cannot increment/decrement undefined variable: {}", name))
+            }
+        } else {
+            Err("Can only increment/decrement variables".to_string())
         }
     }
 }
