@@ -76,29 +76,9 @@ impl<'ctx> CodeGen<'ctx> {
                             }
                         }
                         Expr::ArrayAccess { array, index } => {
-                            let array_ptr = self.gen_expr(array)?;
-                            let index_val = self.gen_expr(index)?.into_float_value();
                             let value_val = self.gen_expr(right)?;
 
-                            let index_int = self
-                                .builder
-                                .build_float_to_unsigned_int(
-                                    index_val,
-                                    self.context.i32_type(),
-                                    "array_idx",
-                                )
-                                .map_err(|e| e.to_string())?;
-
-                            let gep = unsafe {
-                                self.builder
-                                    .build_in_bounds_gep(
-                                        self.context.f64_type().array_type(100),
-                                        array_ptr.into_pointer_value(),
-                                        &[self.context.i32_type().const_zero(), index_int],
-                                        "array_access",
-                                    )
-                                    .map_err(|e| e.to_string())?
-                            };
+                            let gep = self.get_array_element_ptr(array, index)?;
 
                             self.builder
                                 .build_store(gep, value_val)
@@ -106,30 +86,29 @@ impl<'ctx> CodeGen<'ctx> {
 
                             return Ok(value_val);
                         }
-                        Expr::FieldAccess { object: _, field: _ } => {
+                        Expr::FieldAccess {
+                            object: _,
+                            field: _,
+                        } => {
                             let rhs_val = self.gen_expr(right)?.into_float_value();
 
                             fn get_base_object_and_field(expr: &Expr) -> Option<(String, String)> {
                                 match expr {
-                                    Expr::FieldAccess { object, field } => {
-                                        match object.as_ref() {
+                                    Expr::FieldAccess { object, field } => match object.as_ref() {
+                                        Expr::Identifier(name) => {
+                                            Some((name.clone(), field.clone()))
+                                        }
+                                        Expr::FieldAccess {
+                                            object: inner_obj,
+                                            field: _,
+                                        } => match inner_obj.as_ref() {
                                             Expr::Identifier(name) => {
                                                 Some((name.clone(), field.clone()))
                                             }
-                                            Expr::FieldAccess {
-                                                object: inner_obj,
-                                                field: _,
-                                            } => {
-                                                match inner_obj.as_ref() {
-                                                    Expr::Identifier(name) => {
-                                                        Some((name.clone(), field.clone()))
-                                                    }
-                                                    _ => None,
-                                                }
-                                            }
                                             _ => None,
-                                        }
-                                    }
+                                        },
+                                        _ => None,
+                                    },
                                     _ => None,
                                 }
                             }
@@ -240,95 +219,109 @@ impl<'ctx> CodeGen<'ctx> {
                         let function = entry_block.get_parent().unwrap();
                         let rhs_block = self.context.append_basic_block(function, "or_rhs");
                         let merge_block = self.context.append_basic_block(function, "or_merge");
-                        
-                        let lhs_bool = self.builder
+
+                        let lhs_bool = self
+                            .builder
                             .build_float_compare(
-                                FloatPredicate::ONE, 
+                                FloatPredicate::ONE,
                                 lhs,
                                 self.context.f64_type().const_float(0.0),
-                                "lhs_bool"
+                                "lhs_bool",
                             )
                             .map_err(|e| e.to_string())?;
-                            
+
                         self.builder
                             .build_conditional_branch(lhs_bool, merge_block, rhs_block)
                             .map_err(|e| e.to_string())?;
-                            
+
                         self.builder.position_at_end(rhs_block);
                         let rhs_val = self.gen_expr(right)?.into_float_value();
-                        let rhs_bool = self.builder
+                        let rhs_bool = self
+                            .builder
                             .build_float_compare(
-                                FloatPredicate::ONE, 
+                                FloatPredicate::ONE,
                                 rhs_val,
                                 self.context.f64_type().const_float(0.0),
-                                "rhs_bool"
+                                "rhs_bool",
                             )
                             .map_err(|e| e.to_string())?;
                         let rhs_end = self.builder.get_insert_block().unwrap();
-                        self.builder.build_unconditional_branch(merge_block)
+                        self.builder
+                            .build_unconditional_branch(merge_block)
                             .map_err(|e| e.to_string())?;
-                            
+
                         self.builder.position_at_end(merge_block);
-                        let phi = self.builder.build_phi(self.context.bool_type(), "or_result")
+                        let phi = self
+                            .builder
+                            .build_phi(self.context.bool_type(), "or_result")
                             .map_err(|e| e.to_string())?;
                         phi.add_incoming(&[
                             (&self.context.bool_type().const_int(1, false), entry_block),
-                            (&rhs_bool, rhs_end)
+                            (&rhs_bool, rhs_end),
                         ]);
-                        
+
                         self.builder
-                            .build_unsigned_int_to_float(phi.as_basic_value().into_int_value(), 
-                                                       self.context.f64_type(), 
-                                                       "bool_to_float")
+                            .build_unsigned_int_to_float(
+                                phi.as_basic_value().into_int_value(),
+                                self.context.f64_type(),
+                                "bool_to_float",
+                            )
                             .map_err(|e| e.to_string())
-                    },
+                    }
                     Operator::And => {
                         let entry_block = self.builder.get_insert_block().unwrap();
                         let function = entry_block.get_parent().unwrap();
                         let rhs_block = self.context.append_basic_block(function, "and_rhs");
                         let merge_block = self.context.append_basic_block(function, "and_merge");
-                        
-                        let lhs_bool = self.builder
+
+                        let lhs_bool = self
+                            .builder
                             .build_float_compare(
-                                FloatPredicate::ONE, 
+                                FloatPredicate::ONE,
                                 lhs,
                                 self.context.f64_type().const_float(0.0),
-                                "lhs_bool"
+                                "lhs_bool",
                             )
                             .map_err(|e| e.to_string())?;
-                            
+
                         self.builder
                             .build_conditional_branch(lhs_bool, rhs_block, merge_block)
                             .map_err(|e| e.to_string())?;
-                            
+
                         self.builder.position_at_end(rhs_block);
                         let rhs_val = self.gen_expr(right)?.into_float_value();
-                        let rhs_bool = self.builder
+                        let rhs_bool = self
+                            .builder
                             .build_float_compare(
-                                FloatPredicate::ONE, 
+                                FloatPredicate::ONE,
                                 rhs_val,
                                 self.context.f64_type().const_float(0.0),
-                                "rhs_bool"
+                                "rhs_bool",
                             )
                             .map_err(|e| e.to_string())?;
                         let rhs_end = self.builder.get_insert_block().unwrap();
-                        self.builder.build_unconditional_branch(merge_block)
+                        self.builder
+                            .build_unconditional_branch(merge_block)
                             .map_err(|e| e.to_string())?;
-                            
+
                         self.builder.position_at_end(merge_block);
-                        let phi = self.builder.build_phi(self.context.bool_type(), "and_result")
+                        let phi = self
+                            .builder
+                            .build_phi(self.context.bool_type(), "and_result")
                             .map_err(|e| e.to_string())?;
                         phi.add_incoming(&[
                             (&self.context.bool_type().const_int(0, false), entry_block),
-                            (&rhs_bool, rhs_end)
+                            (&rhs_bool, rhs_end),
                         ]);
-                        
+
                         self.builder
-                            .build_unsigned_int_to_float(phi.as_basic_value().into_int_value(), 
-                                                       self.context.f64_type(), 
-                                                       "bool_to_float")
+                            .build_unsigned_int_to_float(
+                                phi.as_basic_value().into_int_value(),
+                                self.context.f64_type(),
+                                "bool_to_float",
+                            )
                             .map_err(|e| e.to_string())
-                    },
+                    }
                     Operator::Assign => unreachable!("Assignment should have been handled already"),
                 }?;
 
@@ -385,48 +378,56 @@ impl<'ctx> CodeGen<'ctx> {
             Expr::Assignment { target, value } => self.gen_assignment(target, value),
             Expr::StructInstantiate(struct_init) => self.gen_struct_instantiate(struct_init),
             Expr::FieldAccess { object, field } => self.gen_field_access(object, field),
-            Expr::UnaryOp { op, expr } => {
-                match op {
-                    UnaryOperator::Negate => {
-                        let val = self.gen_expr(expr)?.into_float_value();
-                        Ok(self.builder
-                            .build_float_neg(val, "negtmp")
-                            .map_err(|e| e.to_string())?
-                            .into())
-                    },
-                    UnaryOperator::LogicalNot => {
-                        let val = self.gen_expr(expr)?.into_float_value();
-                        let is_zero = self.builder
-                            .build_float_compare(
-                                FloatPredicate::OEQ, 
-                                val, 
-                                self.context.f64_type().const_float(0.0), 
-                                "is_zero"
-                            )
-                            .map_err(|e| e.to_string())?;
-                        Ok(self.builder
-                            .build_unsigned_int_to_float(is_zero, self.context.f64_type(), "bool_to_float")
-                            .map_err(|e| e.to_string())?
-                            .into())
-                    },
-                    UnaryOperator::BitwiseNot => {
-                        let val = self.gen_expr(expr)?.into_float_value();
-                        let int_val = self.builder
-                            .build_float_to_signed_int(val, self.context.i64_type(), "float_to_int")
-                            .map_err(|e| e.to_string())?;
-                        let not_val = self.builder
-                            .build_not(int_val, "bitnottmp")
-                            .map_err(|e| e.to_string())?;
-                        Ok(self.builder
-                            .build_signed_int_to_float(not_val, self.context.f64_type(), "int_to_float")
-                            .map_err(|e| e.to_string())?
-                            .into())
-                    },
-                    UnaryOperator::PreIncrement => self.gen_increment(expr, true, true),
-                    UnaryOperator::PreDecrement => self.gen_increment(expr, true, false),
-                    UnaryOperator::PostIncrement => self.gen_increment(expr, false, true),
-                    UnaryOperator::PostDecrement => self.gen_increment(expr, false, false),
+            Expr::UnaryOp { op, expr } => match op {
+                UnaryOperator::Negate => {
+                    let val = self.gen_expr(expr)?.into_float_value();
+                    Ok(self
+                        .builder
+                        .build_float_neg(val, "negtmp")
+                        .map_err(|e| e.to_string())?
+                        .into())
                 }
+                UnaryOperator::LogicalNot => {
+                    let val = self.gen_expr(expr)?.into_float_value();
+                    let is_zero = self
+                        .builder
+                        .build_float_compare(
+                            FloatPredicate::OEQ,
+                            val,
+                            self.context.f64_type().const_float(0.0),
+                            "is_zero",
+                        )
+                        .map_err(|e| e.to_string())?;
+                    Ok(self
+                        .builder
+                        .build_unsigned_int_to_float(
+                            is_zero,
+                            self.context.f64_type(),
+                            "bool_to_float",
+                        )
+                        .map_err(|e| e.to_string())?
+                        .into())
+                }
+                UnaryOperator::BitwiseNot => {
+                    let val = self.gen_expr(expr)?.into_float_value();
+                    let int_val = self
+                        .builder
+                        .build_float_to_signed_int(val, self.context.i64_type(), "float_to_int")
+                        .map_err(|e| e.to_string())?;
+                    let not_val = self
+                        .builder
+                        .build_not(int_val, "bitnottmp")
+                        .map_err(|e| e.to_string())?;
+                    Ok(self
+                        .builder
+                        .build_signed_int_to_float(not_val, self.context.f64_type(), "int_to_float")
+                        .map_err(|e| e.to_string())?
+                        .into())
+                }
+                UnaryOperator::PreIncrement => self.gen_increment(expr, true, true),
+                UnaryOperator::PreDecrement => self.gen_increment(expr, true, false),
+                UnaryOperator::PostIncrement => self.gen_increment(expr, false, true),
+                UnaryOperator::PostDecrement => self.gen_increment(expr, false, false),
             },
         }
     }
@@ -468,93 +469,101 @@ impl<'ctx> CodeGen<'ctx> {
         let printf = self.get_printf_fn()?;
         let mut fmt_str = String::new();
         let mut args: Vec<BasicValueEnum<'ctx>> = Vec::new();
-    
+
         for part in &string.parts {
             match part {
                 StringPart::Text(text) => {
                     let escaped = text.replace("%", "%%");
                     fmt_str.push_str(&escaped);
                 }
-                StringPart::Interpolation(expr) => {
-                    match expr.as_ref() {
-                        Expr::String(str_lit) => {
-                            fmt_str.push_str("%s");
-                            let full_string = str_lit.parts.iter()
-                                .map(|p| p.to_string())
-                                .collect::<String>();
-                            
-                            let str_val = self.builder
-                                .build_global_string_ptr(&full_string, "str_const")
-                                .map_err(|e| e.to_string())?;
-                            args.push(str_val.as_pointer_value().into());
-                        }
-                        Expr::Number(n) => {
-                            fmt_str.push_str("%g");
-                            args.push(self.context.f64_type().const_float(*n).into());
-                        }
-                        Expr::Identifier(name) => {
-                            if let Some(ptr) = self.variables.get(name) {
-                                if self.variable_types.get(name).map_or(false, |t| t == "string") {
-                                    fmt_str.push_str("%s");
-                                    
-                                    let val = self.builder
-                                        .build_load(
-                                            self.context.ptr_type(AddressSpace::default()),
-                                            *ptr,
-                                            name,
-                                        )
-                                        .map_err(|e| e.to_string())?;
-                                    args.push(val);
-                                } else {
-                                    fmt_str.push_str("%g");
-                                    let val = self.builder
-                                        .build_load(self.context.f64_type(), *ptr, name)
-                                        .map_err(|e| e.to_string())?;
-                                    args.push(val);
-                                }
-                            } else {
-                                return Err(format!("Undefined variable in interpolation: {}", name));
-                            }
-                        }
-                        _ => {
-                            if self.is_string_expression(expr)? {
+                StringPart::Interpolation(expr) => match expr.as_ref() {
+                    Expr::String(str_lit) => {
+                        fmt_str.push_str("%s");
+                        let full_string = str_lit
+                            .parts
+                            .iter()
+                            .map(|p| p.to_string())
+                            .collect::<String>();
+
+                        let str_val = self
+                            .builder
+                            .build_global_string_ptr(&full_string, "str_const")
+                            .map_err(|e| e.to_string())?;
+                        args.push(str_val.as_pointer_value().into());
+                    }
+                    Expr::Number(n) => {
+                        fmt_str.push_str("%g");
+                        args.push(self.context.f64_type().const_float(*n).into());
+                    }
+                    Expr::Identifier(name) => {
+                        if let Some(ptr) = self.variables.get(name) {
+                            if self
+                                .variable_types
+                                .get(name)
+                                .map_or(false, |t| t == "string")
+                            {
                                 fmt_str.push_str("%s");
+
+                                let val = self
+                                    .builder
+                                    .build_load(
+                                        self.context.ptr_type(AddressSpace::default()),
+                                        *ptr,
+                                        name,
+                                    )
+                                    .map_err(|e| e.to_string())?;
+                                args.push(val);
                             } else {
                                 fmt_str.push_str("%g");
+                                let val = self
+                                    .builder
+                                    .build_load(self.context.f64_type(), *ptr, name)
+                                    .map_err(|e| e.to_string())?;
+                                args.push(val);
                             }
-                            let val = self.gen_expr(expr)?;
-                            args.push(val);
+                        } else {
+                            return Err(format!("Undefined variable in interpolation: {}", name));
                         }
                     }
-                }
+                    _ => {
+                        if self.is_string_expression(expr)? {
+                            fmt_str.push_str("%s");
+                        } else {
+                            fmt_str.push_str("%g");
+                        }
+                        let val = self.gen_expr(expr)?;
+                        args.push(val);
+                    }
+                },
             }
         }
-    
+
         fmt_str.push_str("\n\0");
-    
+
         let fmt_ptr = self
             .builder
             .build_global_string_ptr(&fmt_str, "fmt_str")
             .map_err(|e| e.to_string())?;
-    
+
         let mut printf_args: Vec<BasicMetadataValueEnum<'ctx>> =
             vec![fmt_ptr.as_pointer_value().into()];
         printf_args.extend(args.iter().map(|arg| BasicMetadataValueEnum::from(*arg)));
-    
+
         self.builder
             .build_call(printf, &printf_args, "printf_call")
             .map_err(|e| e.to_string())?;
-    
+
         Ok(self.context.f64_type().const_float(0.0))
     }
 
     pub fn is_string_expression(&self, expr: &Expr) -> Result<bool, String> {
         match expr {
             Expr::String(_) => Ok(true),
-            Expr::Identifier(name) => {
-                Ok(self.variable_types.get(name).map_or(false, |t| t == "string"))
-            }
-            _ => Ok(false)
+            Expr::Identifier(name) => Ok(self
+                .variable_types
+                .get(name)
+                .map_or(false, |t| t == "string")),
+            _ => Ok(false),
         }
     }
 
@@ -620,53 +629,7 @@ impl<'ctx> CodeGen<'ctx> {
         array: &Box<Expr>,
         index: &Box<Expr>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        fn get_base_array(expr: &Expr) -> Option<String> {
-            match expr {
-                Expr::Identifier(name) => Some(name.clone()),
-                Expr::ArrayAccess { array, index: _ } => get_base_array(array),
-                _ => None,
-            }
-        }
-
-        let array_name = if let Some(name) = get_base_array(array) {
-            name
-        } else {
-            return Err("Array access only supports identifier arrays for now".to_string());
-        };
-
-        let array_ptr = if let Some(&ptr) = self.variables.get(&array_name) {
-            ptr
-        } else {
-            return Err(format!("Unknown array variable: {}", array_name));
-        };
-
-        let index_val = self.gen_expr(index)?.into_float_value();
-
-        let index_int = self
-            .builder
-            .build_float_to_unsigned_int(index_val, self.context.i32_type(), "array_idx")
-            .map_err(|e| e.to_string())?;
-
-        let array_ptr_val = self
-            .builder
-            .build_load(
-                self.context.ptr_type(AddressSpace::default()),
-                array_ptr,
-                "array_ptr",
-            )
-            .map_err(|e| e.to_string())?
-            .into_pointer_value();
-
-        let gep = unsafe {
-            self.builder
-                .build_in_bounds_gep(
-                    self.context.f64_type(),
-                    array_ptr_val,
-                    &[index_int],
-                    "array_access",
-                )
-                .map_err(|e| e.to_string())?
-        };
+        let gep = self.get_array_element_ptr(array, index)?;
 
         self.builder
             .build_load(self.context.f64_type(), gep, "array_element")
@@ -693,25 +656,8 @@ impl<'ctx> CodeGen<'ctx> {
         }
 
         if let Expr::ArrayAccess { array, index } = target {
-            let array_ptr = self.gen_expr(array)?;
-            let index_val = self.gen_expr(index)?.into_float_value();
+            let gep = self.get_array_element_ptr(array, index)?;
             let value_val = self.gen_expr(value)?;
-
-            let index_int = self
-                .builder
-                .build_float_to_unsigned_int(index_val, self.context.i32_type(), "array_idx")
-                .map_err(|e| e.to_string())?;
-
-            let gep = unsafe {
-                self.builder
-                    .build_in_bounds_gep(
-                        self.context.f64_type().array_type(100),
-                        array_ptr.into_pointer_value(),
-                        &[self.context.i32_type().const_zero(), index_int],
-                        "array_access",
-                    )
-                    .map_err(|e| e.to_string())?
-            };
 
             self.builder
                 .build_store(gep, value_val)
@@ -723,7 +669,66 @@ impl<'ctx> CodeGen<'ctx> {
         Err("Invalid assignment target".to_string())
     }
 
+    fn get_array_element_ptr(
+        &mut self,
+        array: &Box<Expr>,
+        index: &Box<Expr>,
+    ) -> Result<inkwell::values::PointerValue<'ctx>, String> {
+        fn get_base_array(expr: &Expr) -> Option<String> {
+            match expr {
+                Expr::Identifier(name) => Some(name.clone()),
+                Expr::ArrayAccess { array, index: _ } => get_base_array(array),
+                _ => None,
+            }
+        }
 
+        let array_name = if let Some(name) = get_base_array(array) {
+            name
+        } else {
+            return Err("Array access only supports identifier arrays for now".to_string());
+        };
+
+        let array_ptr = if let Some(&ptr) = self.variables.get(&array_name) {
+            ptr
+        } else {
+            return Err(format!("Unknown array variable: {}", array_name));
+        };
+
+        let index_val = self.gen_expr(index)?;
+
+        let float_val = index_val.into_float_value();
+
+        let index_int = self
+            .builder
+            .build_float_to_unsigned_int(float_val, self.context.i32_type(), "array_idx")
+            .map_err(|e| { e.to_string() })?;
+
+        let array_ptr_val = self
+            .builder
+            .build_load(
+                self.context.ptr_type(AddressSpace::default()),
+                array_ptr,
+                "array_ptr",
+            )
+            .map_err(|e| {
+                e.to_string()
+            })?;
+
+        let array_ptr_val = array_ptr_val.into_pointer_value();
+
+        let result = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    self.context.f64_type(),
+                    array_ptr_val,
+                    &[index_int],
+                    "array_access",
+                )
+                .map_err(|e| { e.to_string() })
+        };
+
+        result
+    }
 
     pub(crate) fn gen_field_access(
         &mut self,
@@ -784,38 +789,49 @@ impl<'ctx> CodeGen<'ctx> {
             x_ast::Expr::FieldAccess {
                 object: inner_obj,
                 field: _inner_field,
-            } => {
-                self.gen_field_access(inner_obj, field)
-            }
+            } => self.gen_field_access(inner_obj, field),
             _ => Err(
                 "Field access is only supported on identifiers or other field accesses".to_string(),
             ),
         }
     }
 
-    fn gen_increment(&mut self, expr: &Expr, is_pre: bool, is_increment: bool) -> Result<BasicValueEnum<'ctx>, String> {
-        
+    fn gen_increment(
+        &mut self,
+        expr: &Expr,
+        is_pre: bool,
+        is_increment: bool,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
         if let Expr::Identifier(name) = expr {
             if let Some(&alloca) = self.variables.get(name) {
-                let current_val = self.builder
+                let current_val = self
+                    .builder
                     .build_load(self.context.f64_type(), alloca, name)
                     .map_err(|e| e.to_string())?
                     .into_float_value();
-                
+
                 let one = self.context.f64_type().const_float(1.0);
                 let new_val = if is_increment {
                     self.builder.build_float_add(current_val, one, "inc_tmp")
                 } else {
                     self.builder.build_float_sub(current_val, one, "dec_tmp")
-                }.map_err(|e| e.to_string())?;
-                
+                }
+                .map_err(|e| e.to_string())?;
+
                 self.builder
                     .build_store(alloca, new_val)
                     .map_err(|e| e.to_string())?;
-                
-                Ok(if is_pre { new_val.into() } else { current_val.into() })
+
+                Ok(if is_pre {
+                    new_val.into()
+                } else {
+                    current_val.into()
+                })
             } else {
-                Err(format!("Cannot increment/decrement undefined variable: {}", name))
+                Err(format!(
+                    "Cannot increment/decrement undefined variable: {}",
+                    name
+                ))
             }
         } else {
             Err("Can only increment/decrement variables".to_string())
