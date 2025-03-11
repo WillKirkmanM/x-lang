@@ -9,9 +9,12 @@ params = { identifier ~ ("," ~ identifier)* }
 block = { "{" ~ (statement* ~ block_expr?)? ~ "}" }
 block_expr = { expr ~ ";"? }
 
-import = { "import" ~ module ~ "::" ~ item }
-module = { identifier }
-item = { identifier }
+import = { "import" ~ (module_import | file_import) }
+module_import = { module ~ "::" ~ item }
+file_import = { string_path }
+string_path = @{ "\"" ~ (!("\"" | "\\") ~ ANY)* ~ "\"" }
+module = @{ identifier }
+item = @{ identifier }
 
 var_decl = { "let" ~ identifier ~ "=" ~ expr }
 if_stmt = { "if" ~ expr ~ block ~ ("else" ~ block)? }
