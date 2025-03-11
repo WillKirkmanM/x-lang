@@ -51,10 +51,21 @@ pub fn parse_statement(pair: Pair<Rule>) -> Statement {
                     Statement::VariableDecl { name, value: expr }
                 },
                 Rule::import => {
-                    let mut inner_rules = inner.into_inner();
-                    let module = inner_rules.next().unwrap().as_str().to_string();
-                    let item = inner_rules.next().unwrap().as_str().to_string();
-                    Statement::Import { module, item }
+                    let inner = inner.into_inner().next().unwrap();
+                    match inner.as_rule() {
+                        Rule::module_import => {
+                            let mut inner_rules = inner.into_inner();
+                            let module = inner_rules.next().unwrap().as_str().to_string();
+                            let item = inner_rules.next().unwrap().as_str().to_string();
+                            Statement::Import { module, item }
+                        },
+                        Rule::file_import => {
+                            let path_str = inner.into_inner().next().unwrap().as_str();
+                            let path = path_str.trim_matches('"').to_string();
+                            Statement::FileImport { path }
+                        },
+                        _ => unreachable!("Unexpected rule in import: {:?}", inner.as_rule())
+                    }
                 },
                 Rule::function_def => parse_function_def(inner),
                 Rule::struct_decl => parse_struct_decl(inner),

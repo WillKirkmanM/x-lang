@@ -65,13 +65,8 @@ impl<'ctx> CodeGen<'ctx> {
         }
     }
 
-
     pub fn generate(&mut self, program: Program) -> Result<(), String> {
-        for stmt in &program.statements {
-            if let Statement::Import { module, item } = stmt {
-                self.process_import(module, item)?;
-            }
-        }
+        self.process_imports(&program)?;
 
         for stmt in &program.statements {
             if let Statement::Function { name, params, body } = stmt {
