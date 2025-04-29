@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use x_ast::Program;
 use x_parser::parse;
 
 use crate::CodeGen;
