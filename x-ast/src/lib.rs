@@ -23,24 +23,24 @@ pub enum Expr {
     BinaryOp {
         left: Box<Expr>,
         op: Operator,
-        right: Box<Expr>
+        right: Box<Expr>,
     },
     FunctionCall {
         name: String,
-        args: Vec<Expr>
+        args: Vec<Expr>,
     },
     AnonymousFunction {
         params: Vec<String>,
-        body: Vec<Statement>
+        body: Vec<Statement>,
     },
     Array(Vec<Expr>),
     ArrayAccess {
         array: Box<Expr>,
-        index: Box<Expr>
+        index: Box<Expr>,
     },
     Assignment {
         target: Box<Expr>,
-        value: Box<Expr>
+        value: Box<Expr>,
     },
     StructInstantiate(StructInit),
     FieldAccess {
@@ -49,8 +49,8 @@ pub enum Expr {
     },
     UnaryOp {
         op: UnaryOperator,
-        expr: Box<Expr>
-    }
+        expr: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -69,39 +69,73 @@ impl ToString for StringPart {
         match self {
             StringPart::Text(text) => text.clone(),
             StringPart::Interpolation(expr) => match expr.as_ref() {
-                Expr::String(str_lit) => str_lit.parts.iter()
+                Expr::String(str_lit) => str_lit
+                    .parts
+                    .iter()
                     .map(|part| part.to_string())
                     .collect::<String>(),
                 Expr::Identifier(name) => name.clone(),
                 _ => format!("{:?}", expr),
-            }
+            },
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Statement {
-    Expression { expr: Expr },
-    VariableDecl { name: String, value: Expr },
-    Import { module: String, item: String },
-    FileImport { path: String },
-    Function { name: String, params: Vec<String>, body: Box<Vec<Statement>> },
-    Block { statements: Vec<Statement> },
+    Expression {
+        expr: Expr,
+    },
+    VariableDecl {
+        name: String,
+        value: Expr,
+    },
+    Import {
+        module: String,
+        item: String,
+    },
+    FileImport {
+        path: String,
+    },
+    Function {
+        name: String,
+        params: Vec<String>,
+        body: Box<Vec<Statement>>,
+    },
+    ExternFunctionDecl {
+        name: String,
+        params: Vec<ExternParam>,
+        return_type: Option<String>,
+    },
+    Block {
+        statements: Vec<Statement>,
+    },
     Comment(String),
     ForLoop {
         var: String,
         start: Box<Expr>,
         end: Box<Expr>,
-        body: Vec<Statement>
+        body: Vec<Statement>,
     },
     If {
         condition: Box<Expr>,
         then_block: Vec<Statement>,
         else_block: Option<Vec<Statement>>,
     },
-    WhileLoop { condition: Expr, body: Vec<Statement> },
+    WhileLoop {
+        condition: Expr,
+        body: Vec<Statement>,
+    },
     StructDecl(StructDef),
-    Return { value: Option<Expr> },
+    Return {
+        value: Option<Expr>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExternParam {
+    pub name: String,
+    pub type_name: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -118,7 +152,7 @@ pub struct StructInit {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
-    pub statements: Vec<Statement>
+    pub statements: Vec<Statement>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
