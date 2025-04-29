@@ -1,6 +1,7 @@
 use crate::CodeGen;
 use inkwell::{
     module::Linkage,
+    types::{BasicType, BasicTypeEnum},
     values::{BasicMetadataValueEnum, BasicValueEnum, FloatValue, FunctionValue},
     AddressSpace, FloatPredicate,
 };
@@ -12,13 +13,28 @@ impl<'ctx> CodeGen<'ctx> {
             Expr::Number(n) => Ok(self.context.f64_type().const_float(*n as f64).into()),
             Expr::Identifier(name) => {
                 if let Some(ptr) = self.variables.get(name) {
-                    Ok(self
+                    let default_type = "f64".to_string();
+                    let var_type_name = self.variable_types.get(name).unwrap_or(&default_type);
+
+                    let var_llvm_type = self.map_type(var_type_name)?;
+
+                    println!(
+                        "[CodeGen] Loading identifier '{}' with type {:?} ({})",
+                        name, var_llvm_type, var_type_name
+                    );
+
+                    let loaded_val = self
                         .builder
-                        .build_load(self.context.f64_type(), *ptr, name)
-                        .map_err(|e| e.to_string())?
-                        .into())
+                        .build_load(var_llvm_type, *ptr, name)
+                        .map_err(|e| format!("Failed to load variable {}: {}", name, e))?;
+
+                    Ok(loaded_val)
+                } else if let Some(func) = self.module.get_function(name) {
+                    Ok(func.as_global_value().as_pointer_value().into())
+                } else if let Some(func) = self.functions.get(name) {
+                    Ok(func.as_global_value().as_pointer_value().into())
                 } else {
-                    Err(format!("Undefined variable: {}", name))
+                    Err(format!("Undefined variable or function: {}", name))
                 }
             }
             Expr::BinaryOp { left, op, right } => {
@@ -327,16 +343,7 @@ impl<'ctx> CodeGen<'ctx> {
 
                 Ok(result.into())
             }
-            Expr::FunctionCall { name, args } => match name.as_str() {
-                "print" => {
-                    if let Some(Expr::String(string_literal)) = args.first() {
-                        self.gen_print_str(string_literal).map(|v| v.into())
-                    } else {
-                        self.gen_print(args).map(|v| v.into())
-                    }
-                }
-                _ => self.gen_function_call(name, args).map(|v| v.into()),
-            },
+            Expr::FunctionCall { name, args } => self.gen_function_call(name, args),
             Expr::String(str_lit) => {
                 let s = str_lit
                     .parts
@@ -350,30 +357,178 @@ impl<'ctx> CodeGen<'ctx> {
                 Ok(global_str.as_pointer_value().into())
             }
             Expr::AnonymousFunction { params, body } => {
-                let lambda_name = format!("lambda_{}", self.get_unique_id());
-                let function = self.compile_anonymous_function(params, body, &lambda_name)?;
+                let closure_name = self.get_unique_id();
 
-                if let Some(binding_name) = self.current_binding_name.as_ref() {
-                    self.register_function(binding_name.clone(), function);
-                } else {
-                    self.register_function(lambda_name.clone(), function);
+                let param_types: Vec<BasicTypeEnum<'ctx>> = params
+                    .iter()
+                    .map(|_| self.context.f64_type().into())
+                    .collect();
+
+                let param_metadata_types: Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>> =
+                    param_types.iter().map(|&ty| ty.into()).collect();
+
+                let fn_type = self
+                    .context
+                    .f64_type()
+                    .fn_type(&param_metadata_types, false);
+
+                let closure_name_str = format!("closure_{}", closure_name);
+                let function = self.module.add_function(&closure_name_str, fn_type, None);
+                let entry_block = self.context.append_basic_block(function, "entry");
+
+                let old_builder_pos = self.builder.get_insert_block();
+                let old_vars = self.variables.clone();
+                let old_var_types = self.variable_types.clone();
+
+                self.builder.position_at_end(entry_block);
+                self.variables.clear();
+                self.variable_types.clear();
+
+                for (i, param_name) in params.iter().enumerate() {
+                    let param_value = function.get_nth_param(i as u32).unwrap();
+                    let param_type = param_types[i];
+                    param_value.set_name(param_name);
+
+                    let alloca = self.builder.build_alloca(param_type, param_name).unwrap();
+                    self.builder.build_store(alloca, param_value).unwrap();
+
+                    self.variables.insert(param_name.clone(), alloca);
+                    self.variable_types
+                        .insert(param_name.clone(), "f64".to_string());
+                    println!(
+                        "[CodeGen] Closure Param '{}' type: {:?} stored as 'f64'",
+                        param_name, param_type
+                    );
                 }
 
-                let fn_ptr = self
+                let mut last_val: Option<BasicValueEnum<'ctx>> = None;
+                for stmt in body {
+                    last_val = self.gen_statement(stmt)?;
+                    if self
+                        .builder
+                        .get_insert_block()
+                        .and_then(|bb| bb.get_terminator())
+                        .is_some()
+                    {
+                        break;
+                    }
+                }
+
+                if !self
                     .builder
-                    .build_alloca(
-                        self.context.ptr_type(AddressSpace::default()),
-                        "anonymous_fn",
-                    )
-                    .map_err(|e| e.to_string())?;
+                    .get_insert_block()
+                    .and_then(|bb| bb.get_terminator())
+                    .is_some()
+                {
+                    match (last_val, fn_type.get_return_type()) {
+                        (Some(val), Some(expected_ret_type)) => {
+                            if val.get_type() == expected_ret_type {
+                                self.builder.build_return(Some(&val)).unwrap();
+                            } else {
+                                eprintln!("[CodeGen Warning] Closure return type mismatch. Expected {:?}, got {:?}. Attempting bitcast.", expected_ret_type, val.get_type());
+                                let basic_expected_type =
+                                    BasicTypeEnum::try_from(expected_ret_type).unwrap();
+                                let casted_val = self
+                                    .builder
+                                    .build_bit_cast(
+                                        val,
+                                        basic_expected_type,
+                                        "unsafe_closure_ret_cast",
+                                    )
+                                    .unwrap();
+                                self.builder.build_return(Some(&casted_val)).unwrap();
+                            }
+                        }
+                        (Some(_), None) => {
+                            self.builder.build_return(None).unwrap();
+                        }
+                        (None, Some(_)) => {
+                            return Err(format!(
+                                "Closure '{}' must return a value.",
+                                closure_name_str
+                            ));
+                        }
+                        (None, None) => {
+                            self.builder.build_return(None).unwrap();
+                        }
+                    }
+                }
 
-                self.builder
-                    .build_store(fn_ptr, function.as_global_value().as_pointer_value())
-                    .map_err(|e| e.to_string())?;
+                self.variables = old_vars;
+                self.variable_types = old_var_types;
+                if let Some(bb) = old_builder_pos {
+                    self.builder.position_at_end(bb);
+                } else {
+                }
 
-                Ok(fn_ptr.into())
+                Ok(function.as_global_value().as_pointer_value().into())
             }
-            Expr::Array(elements) => self.gen_array(elements),
+            Expr::Array(elements) => {
+                if elements.is_empty() {
+                    let f64_ptr_type = self.context.ptr_type(AddressSpace::default());
+                    return Ok(f64_ptr_type.const_null().into());
+                }
+
+                let first_val = self.gen_expr(&elements[0])?;
+                let element_type = first_val.get_type();
+                let array_type = element_type.array_type(elements.len() as u32);
+
+                let array_alloca = self
+                    .builder
+                    .build_alloca(array_type, "array_literal")
+                    .unwrap();
+
+                for (i, elem_expr) in elements.iter().enumerate() {
+                    let elem_val = self.gen_expr(elem_expr)?;
+                    if elem_val.get_type() != element_type {
+                        eprintln!("[CodeGen Warning] Array element type mismatch. Expected {:?}, got {:?}. Attempting bitcast.", element_type, elem_val.get_type());
+                        let casted_val = self
+                            .builder
+                            .build_bit_cast(elem_val, element_type, "unsafe_arr_elem_cast")
+                            .unwrap();
+                        let index_val = self.context.i32_type().const_int(i as u64, false);
+                        let elem_ptr = unsafe {
+                            self.builder
+                                .build_gep(
+                                    array_type,
+                                    array_alloca,
+                                    &[self.context.i32_type().const_zero(), index_val],
+                                    "elem_ptr",
+                                )
+                                .unwrap()
+                        };
+                        self.builder.build_store(elem_ptr, casted_val).unwrap();
+                    } else {
+                        let index_val = self.context.i32_type().const_int(i as u64, false);
+                        let elem_ptr = unsafe {
+                            self.builder
+                                .build_gep(
+                                    array_type,
+                                    array_alloca,
+                                    &[self.context.i32_type().const_zero(), index_val],
+                                    "elem_ptr",
+                                )
+                                .unwrap()
+                        };
+                        self.builder.build_store(elem_ptr, elem_val).unwrap();
+                    }
+                }
+
+                let first_elem_ptr = unsafe {
+                    self.builder
+                        .build_gep(
+                            array_type,
+                            array_alloca,
+                            &[
+                                self.context.i32_type().const_zero(),
+                                self.context.i32_type().const_zero(),
+                            ],
+                            "array_decay",
+                        )
+                        .unwrap()
+                };
+                Ok(first_elem_ptr.into())
+            }
             Expr::ArrayAccess { array, index } => self.gen_array_access(array, index),
             Expr::Assignment { target, value } => self.gen_assignment(target, value),
             Expr::StructInstantiate(struct_init) => self.gen_struct_instantiate(struct_init),
@@ -590,40 +745,6 @@ impl<'ctx> CodeGen<'ctx> {
         }
     }
 
-    fn gen_array(&mut self, elements: &[Expr]) -> Result<BasicValueEnum<'ctx>, String> {
-        let f64_type = self.context.f64_type();
-        let array_type = f64_type.array_type(elements.len() as u32);
-
-        let alloca = self
-            .builder
-            .build_alloca(array_type, "array_alloca")
-            .map_err(|e| e.to_string())?;
-
-        for (i, element) in elements.iter().enumerate() {
-            let value = self.gen_expr(element)?.into_float_value();
-
-            let element_ptr = unsafe {
-                self.builder
-                    .build_in_bounds_gep(
-                        array_type,
-                        alloca,
-                        &[
-                            self.context.i32_type().const_zero(),
-                            self.context.i32_type().const_int(i as u64, false),
-                        ],
-                        &format!("array_elem_ptr_{}", i),
-                    )
-                    .map_err(|e| e.to_string())?
-            };
-
-            self.builder
-                .build_store(element_ptr, value)
-                .map_err(|e| e.to_string())?;
-        }
-
-        Ok(alloca.into())
-    }
-
     pub(crate) fn gen_array_access(
         &mut self,
         array: &Box<Expr>,
@@ -701,7 +822,7 @@ impl<'ctx> CodeGen<'ctx> {
         let index_int = self
             .builder
             .build_float_to_unsigned_int(float_val, self.context.i32_type(), "array_idx")
-            .map_err(|e| { e.to_string() })?;
+            .map_err(|e| e.to_string())?;
 
         let array_ptr_val = self
             .builder
@@ -710,9 +831,7 @@ impl<'ctx> CodeGen<'ctx> {
                 array_ptr,
                 "array_ptr",
             )
-            .map_err(|e| {
-                e.to_string()
-            })?;
+            .map_err(|e| e.to_string())?;
 
         let array_ptr_val = array_ptr_val.into_pointer_value();
 
@@ -724,7 +843,7 @@ impl<'ctx> CodeGen<'ctx> {
                     &[index_int],
                     "array_access",
                 )
-                .map_err(|e| { e.to_string() })
+                .map_err(|e| e.to_string())
         };
 
         result
