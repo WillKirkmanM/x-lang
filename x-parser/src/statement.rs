@@ -1,7 +1,7 @@
 use pest::iterators::Pair;
 use x_ast::Statement;
 
-use crate::{expression::parse_expr, function::parse_function_def, r#return::parse_return_statement, r#struct::parse_struct_decl, r#while::parse_while_loop, Rule};
+use crate::{expression::parse_expr, extern_fn::parse_extern_fn_decl, function::parse_function_def, r#return::parse_return_statement, r#struct::parse_struct_decl, r#while::parse_while_loop, Rule};
 
 pub fn parse_statement(pair: Pair<Rule>) -> Statement {
     match pair.as_rule() {
@@ -67,6 +67,7 @@ pub fn parse_statement(pair: Pair<Rule>) -> Statement {
                         _ => unreachable!("Unexpected rule in import: {:?}", inner.as_rule())
                     }
                 },
+                Rule::extern_fn_decl => parse_extern_fn_decl(inner),
                 Rule::function_def => parse_function_def(inner),
                 Rule::struct_decl => parse_struct_decl(inner),
                 Rule::COMMENT => Statement::Comment(inner.as_str().trim_start_matches("//").trim().to_string()),

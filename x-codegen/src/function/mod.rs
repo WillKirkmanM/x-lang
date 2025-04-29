@@ -1,7 +1,7 @@
 use crate::CodeGen;
-use inkwell::values::{BasicMetadataValueEnum, FloatValue, FunctionValue};
-use inkwell::AddressSpace;
-use x_ast::{Expr, Statement, StringPart};
+use inkwell::types::{AnyType, BasicTypeEnum};
+use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, PointerValue};
+use x_ast::{Expr, Statement, StringLiteral, StringPart};
 
 impl<'ctx> CodeGen<'ctx> {
     pub fn get_unique_id(&mut self) -> usize {
@@ -45,7 +45,7 @@ impl<'ctx> CodeGen<'ctx> {
         let mut last_val = self.context.f64_type().const_float(0.0);
         for stmt in body {
             if let Some(val) = self.gen_statement(stmt)? {
-                last_val = val;
+                last_val = val.into_float_value();
             }
         }
 
@@ -65,89 +65,284 @@ impl<'ctx> CodeGen<'ctx> {
         &mut self,
         name: &str,
         args: &[Expr],
-    ) -> Result<FloatValue<'ctx>, String> {
-        if name == "print" && args.first().map_or(false, |arg| matches!(arg, Expr::String(_))) {
-            if let Some(Expr::String(string_literal)) = args.first() {
-                return self.gen_print_str(string_literal);
-            }
-        }
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if name == "print" && args.len() == 1 {
+            let arg_expr = &args[0];
 
-        let f = if let Some(f) = self.functions.get(name) {
-            *f
-        } else if let Some(f) = self.imported_functions.get(name) {
-            *f
-        } else if let Some(f) = self.module.get_function(name) {
-            f
-        } else {
-            return Err(format!(
-                "Unknown function {}, Available Functions: {}",
-                name,
-                self.functions
-                    .keys()
-                    .map(|k| k.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
-        };
+            if let Expr::String(StringLiteral { parts }) = arg_expr {
+                if parts.len() > 1
+                    || parts
+                        .iter()
+                        .any(|p| matches!(p, StringPart::Interpolation(_)))
+                {
+                    let printf_fn = self
+                        .module
+                        .get_function("printf")
+                        .ok_or("printf function not declared")?;
 
-        let mut compiled_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
-        
-        for (i, arg) in args.iter().enumerate() {
-            match arg {
-                Expr::String(string_literal) => {
-                    let s = string_literal.parts.iter()
-                        .map(|p| p.to_string())
-                        .collect::<String>();
-                    
-                    let global_str = self.builder
-                        .build_global_string_ptr(&s, &format!("str_arg_{}", i))
-                        .map_err(|e| e.to_string())?;
-                    
-                    compiled_args.push(global_str.as_pointer_value().into());
-                    
-                    if let Some(param_name) = f.get_nth_param(i as u32)
-                        .map(|p| p.get_name().to_string_lossy().into_owned())
-                    {
-                        self.variable_types.insert(param_name, "string".to_string());
-                    }
-                },
-                Expr::Identifier(var_name) => {
-                    if let Some(&ptr) = self.variables.get(var_name) {
-                        if self.variable_types.get(var_name).map_or(false, |t| t == "string") {
-                            let val = self.builder
-                                .build_load(self.context.ptr_type(AddressSpace::default()), ptr, var_name)
-                                .map_err(|e| e.to_string())?;
-                            compiled_args.push(val.into());
-                            
-                            if let Some(param_name) = f.get_nth_param(i as u32)
-                                .map(|p| p.get_name().to_string_lossy().into_owned())
-                            {
-                                self.variable_types.insert(param_name, "string".to_string());
+                    for part in parts {
+                        match part {
+                            StringPart::Text(text) => {
+                                let global_str = self.get_or_create_global_string(text, "str_part");
+                                let format_str = self.get_or_create_global_string("%s", "fmt_s");
+                                self.builder
+                                    .build_call(
+                                        printf_fn,
+                                        &[format_str.into(), global_str.into()],
+                                        "printf_text",
+                                    )
+                                    .unwrap();
                             }
-                        } else {
-                            let val = self.builder
-                                .build_load(self.context.f64_type(), ptr, var_name)
-                                .map_err(|e| e.to_string())?;
-                            compiled_args.push(val.into());
+                            StringPart::Interpolation(expr) => {
+                                let val = self.gen_expr(expr)?;
+                                match val {
+                                    BasicValueEnum::PointerValue(pv) => {
+                                        let format_str =
+                                            self.get_or_create_global_string("%s", "fmt_s");
+                                        self.builder
+                                            .build_call(
+                                                printf_fn,
+                                                &[format_str.into(), pv.into()],
+                                                "printf_interp_s",
+                                            )
+                                            .unwrap();
+                                    }
+                                    BasicValueEnum::FloatValue(fv) => {
+                                        let format_str =
+                                            self.get_or_create_global_string("%.0f", "fmt_f");
+                                        self.builder
+                                            .build_call(
+                                                printf_fn,
+                                                &[format_str.into(), fv.into()],
+                                                "printf_interp_f",
+                                            )
+                                            .unwrap();
+                                    }
+                                    BasicValueEnum::IntValue(iv) => {
+                                        let format_str =
+                                            self.get_or_create_global_string("%lld", "fmt_i");
+                                        self.builder
+                                            .build_call(
+                                                printf_fn,
+                                                &[format_str.into(), iv.into()],
+                                                "printf_interp_i",
+                                            )
+                                            .unwrap();
+                                    }
+                                    _ => {
+                                        return Err(format!(
+                                            "Unsupported type for string interpolation: {:?}",
+                                            val.get_type()
+                                        ))
+                                    }
+                                }
+                            }
                         }
-                    } else {
-                        return Err(format!("Unknown variable: {}", var_name));
                     }
-                },
-                _ => {
-                    compiled_args.push(self.gen_expr(arg)?.into());
+
+                    let newline_str = self.get_or_create_global_string("\n", "fmt_nl");
+                    self.builder
+                        .build_call(printf_fn, &[newline_str.into()], "printf_nl")
+                        .unwrap();
+
+                    return Ok(self.context.f64_type().const_float(0.0).into());
                 }
             }
+
+            let val = self.gen_expr(arg_expr)?;
+            let (target_fn_name, meta_arg): (&str, BasicMetadataValueEnum) = match val {
+                BasicValueEnum::PointerValue(pv) => ("print_str", pv.into()),
+                BasicValueEnum::FloatValue(fv) => ("print", fv.into()),
+                BasicValueEnum::IntValue(iv) => {
+                    let f64_type = self.context.f64_type();
+                    let float_val = self
+                        .builder
+                        .build_signed_int_to_float(iv, f64_type, "print_i_to_f")
+                        .unwrap();
+                    ("print", float_val.into())
+                }
+                _ => {
+                    return Err(format!(
+                        "std::print called with unsupported argument type {:?}",
+                        val.get_type()
+                    ))
+                }
+            };
+            let func = self
+                .imported_functions
+                .get(target_fn_name)
+                .copied()
+                .or_else(|| self.module.get_function(target_fn_name))
+                .ok_or_else(|| {
+                    format!(
+                        "Standard library function '{}' not imported or found.",
+                        target_fn_name
+                    )
+                })?;
+            self.builder
+                .build_call(func, &[meta_arg], &format!("calltmp_{}", target_fn_name))
+                .unwrap();
+            return Ok(self.context.f64_type().const_float(0.0).into());
         }
 
-        let call_result = self.builder
-            .build_call(f, &compiled_args, "calltmp")
+        let function_to_call: FunctionValue<'ctx>;
+        let expected_param_types: Vec<BasicTypeEnum<'ctx>>;
+
+        if let Some(var_ptr) = self.variables.get(name) {
+            let f64_type = &"f64".to_string();
+            let var_type_name = self.variable_types.get(name).unwrap_or(f64_type);
+            let var_llvm_type = self.map_type(var_type_name)?;
+
+            let loaded_val = self
+                .builder
+                .build_load(var_llvm_type, *var_ptr, &format!("load_{}", name))
+                .unwrap();
+
+            if loaded_val.is_pointer_value() {
+                let loaded_ptr = loaded_val.into_pointer_value();
+                if loaded_ptr.get_type().as_any_type_enum().is_function_type() {
+                    let function_name = loaded_ptr.get_name().to_string_lossy().to_string();
+                    function_to_call =
+                        self.module.get_function(&function_name).ok_or_else(|| {
+                            format!(
+                                "Function pointer '{}' does not point to a known function.",
+                                name
+                            )
+                        })?;
+                    expected_param_types = function_to_call.get_type().get_param_types();
+                } else {
+                    return Err(format!(
+                        "Variable '{}' is a pointer but does not point to a function.",
+                        name
+                    ));
+                }
+            } else {
+                return Err(format!(
+                    "Variable '{}' is not a function or function pointer.",
+                    name
+                ));
+            }
+        } else if let Some(f) = self.functions.get(name) {
+            function_to_call = *f;
+            expected_param_types = function_to_call.get_type().get_param_types();
+        } else if let Some(f) = self.imported_functions.get(name) {
+            function_to_call = *f;
+            expected_param_types = function_to_call.get_type().get_param_types();
+        } else if let Some(f) = self.external_functions.get(name) {
+            function_to_call = *f;
+            expected_param_types = function_to_call.get_type().get_param_types();
+        } else if let Some(f) = self.module.get_function(name) {
+            function_to_call = f;
+            expected_param_types = function_to_call.get_type().get_param_types();
+        } else {
+            return Err(format!(
+                 "Unknown function or callable variable: '{}'. Available internal: {:?}, imported: {:?}, external: {:?}, module: {:?}, variables: {:?}",
+                 name,
+                 self.functions.keys().collect::<Vec<_>>(),
+                 self.imported_functions.keys().collect::<Vec<_>>(),
+                 self.external_functions.keys().collect::<Vec<_>>(),
+                 self.module.get_functions().map(|f| f.get_name().to_str().unwrap_or("").to_string()).collect::<Vec<_>>(),
+                 self.variables.keys().collect::<Vec<_>>()
+             ));
+        }
+
+        if args.len() != expected_param_types.len() {
+            return Err(format!(
+                "Function/Callable '{}' called with {} arguments, but expected {}.",
+                name,
+                args.len(),
+                expected_param_types.len()
+            ));
+        }
+
+        let mut compiled_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
+        for (i, arg) in args.iter().enumerate() {
+            let expected_type = expected_param_types[i];
+            let arg_val = self.gen_expr(arg)?;
+
+            let coerced_arg: BasicMetadataValueEnum<'ctx> = match (expected_type, arg_val) {
+                (BasicTypeEnum::FloatType(et), BasicValueEnum::FloatValue(av))
+                    if et == av.get_type() =>
+                {
+                    av.into()
+                }
+                (BasicTypeEnum::IntType(et), BasicValueEnum::IntValue(av))
+                    if et == av.get_type() =>
+                {
+                    av.into()
+                }
+                (BasicTypeEnum::PointerType(et), BasicValueEnum::PointerValue(av))
+                    if et == av.get_type() =>
+                {
+                    av.into()
+                }
+                (BasicTypeEnum::StructType(et), BasicValueEnum::StructValue(av))
+                    if et == av.get_type() =>
+                {
+                    av.into()
+                }
+
+                (BasicTypeEnum::FloatType(et), BasicValueEnum::IntValue(av)) => self
+                    .builder
+                    .build_signed_int_to_float(av, et, "arg_i_to_f")
+                    .map_err(|e| e.to_string())?
+                    .into(),
+                (BasicTypeEnum::IntType(et), BasicValueEnum::FloatValue(av)) => self
+                    .builder
+                    .build_float_to_signed_int(av, et, "arg_f_to_i")
+                    .map_err(|e| e.to_string())?
+                    .into(),
+                (BasicTypeEnum::PointerType(et), BasicValueEnum::PointerValue(av)) => {
+                    if et != av.get_type() {
+                        self.builder
+                            .build_pointer_cast(av, et, "arg_ptr_cast")
+                            .map_err(|e| e.to_string())?
+                            .into()
+                    } else {
+                        av.into()
+                    }
+                }
+                (BasicTypeEnum::StructType(st), BasicValueEnum::PointerValue(pv))
+                    if expected_type.is_struct_type() =>
+                {
+                    self.builder
+                        .build_load(st, pv, "load_struct_arg")
+                        .map_err(|e| e.to_string())?
+                        .into()
+                }
+
+                _ if expected_type != arg_val.get_type() => {
+                    eprintln!(
+                        "[CodeGen Warning] Unsafe argument type coercion: Attempting bitcast for argument {} in call to '{}'. Expected {:?}, got {:?}.",
+                        i, name, expected_type, arg_val.get_type()
+                    );
+                    self.builder
+                        .build_bit_cast(arg_val, expected_type, "unsafe_arg_cast")
+                        .map_err(|e| format!("Failed unsafe bitcast for argument {}: {}", i, e))?
+                        .into()
+                }
+                _ => arg_val.into(),
+            };
+            compiled_args.push(coerced_arg);
+        }
+
+        let call_result = self
+            .builder
+            .build_call(function_to_call, &compiled_args, "calltmp")
             .map_err(|e| e.to_string())?;
 
-        match call_result.try_as_basic_value().left() {
-            Some(value) => Ok(value.into_float_value()),
-            None => Ok(self.context.f64_type().const_float(0.0)),
-        }
+        Ok(call_result
+            .try_as_basic_value()
+            .left()
+            .unwrap_or_else(|| self.context.f64_type().const_float(0.0).into()))
+    }
+
+    fn get_or_create_global_string(&mut self, text: &str, name_prefix: &str) -> PointerValue<'ctx> {
+        let unique_name = format!("{}_{}", name_prefix, self.get_unique_id());
+        self.builder
+            .build_global_string_ptr(text, &unique_name)
+            .unwrap()
+            .as_pointer_value()
     }
 
     pub fn compile_function(
@@ -156,67 +351,159 @@ impl<'ctx> CodeGen<'ctx> {
         params: &[String],
         body: &[Statement],
     ) -> Result<FunctionValue<'ctx>, String> {
-        let mut param_is_string = Vec::with_capacity(params.len());
-        
-        for param in params {
-            let is_string = param == "source" || param == "target" || param == "auxiliary" ||
-                            param.contains("str") || param.contains("name") || 
-                            param.contains("path");
-            param_is_string.push(is_string);
-        }
-        
-        let param_types: Vec<_> = param_is_string
-            .iter()
-            .map(|&is_string| {
-                if is_string {
-                    self.context.ptr_type(AddressSpace::default()).into()
-                } else {
-                    self.context.f64_type().into()
-                }
-            })
-            .collect();
-        
-        let fn_type = self.context.f64_type().fn_type(&param_types, false);
-        let function = self.module.add_function(name, fn_type, None);
+        let function = self
+            .module
+            .get_function(name)
+            .ok_or_else(|| format!("Function {} not declared before compilation.", name))?;
 
-        let entry = self.context.append_basic_block(function, "entry");
-        self.builder.position_at_end(entry);
+        let entry_block = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry_block);
 
+        let old_vars = self.variables.clone();
+        let old_var_types = self.variable_types.clone();
+        let old_current_fn = self.current_function;
         self.variables.clear();
+        self.variable_types.clear();
+        self.current_function = Some(function);
+
         for (i, param_name) in params.iter().enumerate() {
-            let param = function.get_nth_param(i as u32).unwrap();
-            let is_string = param_is_string[i];
-            
-            if is_string {
-                self.variable_types.insert(param_name.clone(), "string".to_string());
-            }
-            
-            let ptr = if is_string {
-                self.builder
-                    .build_alloca(self.context.ptr_type(AddressSpace::default()), param_name)
-                    .map_err(|e| e.to_string())?
-            } else {
-                self.builder
-                    .build_alloca(self.context.f64_type(), param_name)
-                    .map_err(|e| e.to_string())?
-            };
-            
+            let param_value = function
+                .get_nth_param(i as u32)
+                .ok_or_else(|| format!("Missing parameter {} for function {}", i, name))?;
+            let param_type = param_value.get_type();
+
+            let alloca = self
+                .builder
+                .build_alloca(param_type, param_name)
+                .map_err(|e| format!("Failed to alloca param {}: {}", param_name, e))?;
+
             self.builder
-                .build_store(ptr, param)
-                .map_err(|e| e.to_string())?;
-            self.variables.insert(param_name.clone(), ptr);
+                .build_store(alloca, param_value)
+                .map_err(|e| format!("Failed to store param {}: {}", param_name, e))?;
+
+            self.variables.insert(param_name.clone(), alloca);
+
+            let type_name_str = match param_type {
+                BasicTypeEnum::FloatType(_) => "f64",
+                BasicTypeEnum::PointerType(_) => "str",
+                BasicTypeEnum::IntType(_) => "i32",
+                BasicTypeEnum::StructType(st) => self
+                    .struct_types
+                    .iter()
+                    .find(|(_, (llvm_st, _))| llvm_st == &st)
+                    .map(|(name, _)| name.as_str())
+                    .unwrap_or("unknown_struct"),
+                _ => "unknown",
+            };
+            self.variable_types
+                .insert(param_name.clone(), type_name_str.to_string());
+            println!(
+                "[CodeGen] Param '{}' type: {:?} stored as '{}'",
+                param_name, param_type, type_name_str
+            );
         }
 
-        let mut last_value = self.context.f64_type().const_float(0.0);
+        let mut last_val: Option<BasicValueEnum<'ctx>> = None;
         for stmt in body {
-            if let Some(val) = self.gen_statement(stmt)? {
-                last_value = val;
+            if self
+                .builder
+                .get_insert_block()
+                .and_then(|bb| bb.get_terminator())
+                .is_some()
+            {
+                eprintln!("[CodeGen Warning] Unreachable code detected in function '{}' after a terminator.", name);
+                break;
+            }
+            match self.gen_statement(stmt) {
+                Ok(val_opt) => {
+                    last_val = val_opt;
+                }
+                Err(e) => {
+                    self.variables = old_vars;
+                    self.variable_types = old_var_types;
+                    self.current_function = old_current_fn;
+                    return Err(format!("Error in body of function {}: {}", name, e));
+                }
             }
         }
 
-        self.builder
-            .build_return(Some(&last_value))
-            .map_err(|e| e.to_string())?;
+        println!("[CodeGen Debug] Building return for '{}'. Current block terminated: {:?}. Last value produced: {:?}",
+                 name,
+                 self.builder.get_insert_block().and_then(|bb| bb.get_terminator()).is_some(),
+                 last_val.map(|v| v.get_type()));
+
+        if self
+            .builder
+            .get_insert_block()
+            .and_then(|bb| bb.get_terminator())
+            .is_none()
+        {
+            let expected_return_type = function.get_type().get_return_type();
+
+            println!(
+                "[CodeGen Debug] Expected return type for '{}': {:?}",
+                name, expected_return_type
+            );
+
+            match expected_return_type {
+                Some(ret_type) => match last_val {
+                    Some(val) => {
+                        if val.get_type() == ret_type {
+                            println!("[CodeGen Debug] Building return with value: {:?}", val);
+                            self.builder.build_return(Some(&val)).map_err(|e| {
+                                format!("Failed to build return for {}: {}", name, e)
+                            })?;
+                        } else {
+                            if ret_type.is_float_type() && val.is_int_value() {
+                                eprintln!("[CodeGen Warning] Coercing return value (int -> float) in function '{}'.", name);
+                                let coerced = self
+                                    .builder
+                                    .build_signed_int_to_float(
+                                        val.into_int_value(),
+                                        ret_type.into_float_type(),
+                                        "ret_coerce_i2f",
+                                    )
+                                    .unwrap();
+                                println!(
+                                    "[CodeGen Debug] Building return with coerced value: {:?}",
+                                    coerced
+                                );
+                                self.builder.build_return(Some(&coerced)).unwrap();
+                            } else {
+                                self.variables = old_vars;
+                                self.variable_types = old_var_types;
+                                self.current_function = old_current_fn;
+                                return Err(format!(
+                                        "Implicit return type mismatch in function '{}'. Expected {:?}, got {:?}. Cannot safely coerce.",
+                                        name, ret_type, val.get_type()
+                                    ));
+                            }
+                        }
+                    }
+                    None => {
+                        self.variables = old_vars;
+                        self.variable_types = old_var_types;
+                        self.current_function = old_current_fn;
+                        return Err(format!("Function '{}' expects a return value of type {:?}, but none was provided by the last statement.", name, ret_type));
+                    }
+                },
+                None => {
+                    println!("[CodeGen Debug] Building void return for '{}'", name);
+                    self.builder
+                        .build_return(None)
+                        .map_err(|e| format!("Failed to build void return for {}: {}", name, e))?;
+                }
+            }
+        } else {
+            println!(
+                "[CodeGen Debug] Block for '{}' already terminated. Skipping implicit return.",
+                name
+            );
+        }
+
+        self.variables = old_vars;
+        self.variable_types = old_var_types;
+        self.current_function = old_current_fn;
 
         Ok(function)
     }
@@ -224,8 +511,9 @@ impl<'ctx> CodeGen<'ctx> {
     pub fn register_function(&mut self, original_name: String, function: FunctionValue<'ctx>) {
         let generated_name = function.get_name().to_string_lossy().into_owned();
         self.functions.insert(original_name.clone(), function);
-        self.original_to_generated.insert(original_name.clone(), generated_name.clone());
-        self.generated_to_original.insert(generated_name, original_name);
+        self.original_to_generated
+            .insert(original_name.clone(), generated_name.clone());
+        self.generated_to_original
+            .insert(generated_name, original_name);
     }
-
 }

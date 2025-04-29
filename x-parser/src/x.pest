@@ -2,7 +2,12 @@ WHITESPACE = _{ " " | "\t" | "\r" | "\n" | COMMENT }
 COMMENT = _{ "//" ~ (!NEWLINE ~ ANY)* ~ NEWLINE }
 
 program = { SOI ~ statement* ~ EOI }
-statement = { struct_decl | if_stmt | for_loop | while_loop | function_def | return_stmt | (var_decl | import | expr) ~ ";" }
+statement = { extern_fn_decl | struct_decl | if_stmt | for_loop | while_loop | function_def | return_stmt | (var_decl | import | expr) ~ ";" }
+
+extern_fn_decl = { "extern" ~ "fn" ~ identifier ~ "(" ~ extern_params? ~ ")" ~ ( "->" ~ type_specifier )? ~ ";" }
+extern_params = { extern_param ~ ("," ~ extern_param)* }
+extern_param = { identifier ~ ":" ~ type_specifier }
+type_specifier = @{ identifier }
 
 function_def = { "fn" ~ identifier ~ "(" ~ params? ~ ")" ~ block }
 params = { identifier ~ ("," ~ identifier)* }

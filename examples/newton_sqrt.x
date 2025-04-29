@@ -28,11 +28,11 @@ fn sqrt_newton(n) {
 }
 
 print("Square root approximations using Newton's method:");
-print("sqrt(4) ≈");
-print(sqrt_newton(4));
+let two = sqrt_newton(4);
+print("sqrt(4) ≈ {two}");
 
-print("sqrt(10) ≈");
-print(sqrt_newton(10));
+let three = sqrt_newton(10);
+print("sqrt(10) ≈ {three}");
 
-print("sqrt(100) ≈");
-print(sqrt_newton(100));
+let ten = sqrt_newton(100);
+print("sqrt(100) ≈ {ten}");
