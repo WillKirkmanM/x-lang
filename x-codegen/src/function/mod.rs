@@ -209,7 +209,17 @@ impl<'ctx> CodeGen<'ctx> {
                                 name
                             )
                         })?;
-                    expected_param_types = function_to_call.get_type().get_param_types();
+
+                    let params_metadata = function_to_call.get_type().get_param_types();
+
+                    expected_param_types = params_metadata
+                        .iter()
+                        .map(|param| {
+                            BasicTypeEnum::try_from(*param).map_err(|_| {
+                                format!("Function '{}' has unsupported metadata parameters.", name)
+                            })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
                 } else {
                     return Err(format!(
                         "Variable '{}' is a pointer but does not point to a function.",
@@ -224,16 +234,52 @@ impl<'ctx> CodeGen<'ctx> {
             }
         } else if let Some(f) = self.functions.get(name) {
             function_to_call = *f;
-            expected_param_types = function_to_call.get_type().get_param_types();
+            expected_param_types = function_to_call
+                .get_type()
+                .get_param_types()
+                .into_iter()
+                .map(|meta| {
+                    BasicTypeEnum::try_from(meta).map_err(|_| {
+                        format!("Function '{}' has unsupported metadata parameters.", name)
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
         } else if let Some(f) = self.imported_functions.get(name) {
             function_to_call = *f;
-            expected_param_types = function_to_call.get_type().get_param_types();
+            expected_param_types = function_to_call
+                .get_type()
+                .get_param_types()
+                .into_iter()
+                .map(|meta| {
+                    BasicTypeEnum::try_from(meta).map_err(|_| {
+                        format!("Function '{}' has unsupported metadata parameters.", name)
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
         } else if let Some(f) = self.external_functions.get(name) {
             function_to_call = *f;
-            expected_param_types = function_to_call.get_type().get_param_types();
+            expected_param_types = function_to_call
+                .get_type()
+                .get_param_types()
+                .into_iter()
+                .map(|meta| {
+                    BasicTypeEnum::try_from(meta).map_err(|_| {
+                        format!("Function '{}' has unsupported metadata parameters.", name)
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
         } else if let Some(f) = self.module.get_function(name) {
             function_to_call = f;
-            expected_param_types = function_to_call.get_type().get_param_types();
+            expected_param_types = function_to_call
+                .get_type()
+                .get_param_types()
+                .into_iter()
+                .map(|meta| {
+                    BasicTypeEnum::try_from(meta).map_err(|_| {
+                        format!("Function '{}' has unsupported metadata parameters.", name)
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
         } else {
             return Err(format!(
                  "Unknown function or callable variable: '{}'. Available internal: {:?}, imported: {:?}, external: {:?}, module: {:?}, variables: {:?}",
@@ -350,11 +396,21 @@ impl<'ctx> CodeGen<'ctx> {
         name: &str,
         params: &[String],
         body: &[Statement],
+        is_pure: bool,
+        is_memoised: bool,
     ) -> Result<FunctionValue<'ctx>, String> {
         let function = self
             .module
             .get_function(name)
             .ok_or_else(|| format!("Function {} not declared before compilation.", name))?;
+
+        if is_pure || !is_memoised {
+            use inkwell::attributes::{Attribute, AttributeLoc};
+            let readnone_attr_kind_id = Attribute::get_named_enum_kind_id("readnone");
+            assert_ne!(readnone_attr_kind_id, 0);
+            let readnone_attr = self.context.create_enum_attribute(readnone_attr_kind_id, 0);
+            function.add_attribute(AttributeLoc::Function, readnone_attr);
+        }
 
         let entry_block = self.context.append_basic_block(function, "entry");
         self.builder.position_at_end(entry_block);

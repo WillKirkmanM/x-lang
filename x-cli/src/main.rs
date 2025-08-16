@@ -1,7 +1,7 @@
-use std::process::Command;
-use std::fs;
 use clap::{Parser, Subcommand};
 use inkwell::context::Context;
+use std::fs;
+use std::process::Command;
 use x_codegen::CodeGen;
 use x_parser::parse;
 
@@ -19,11 +19,11 @@ enum Commands {
     Run {
         /// Source file to run
         file: String,
-        
+
         /// Emit LLVM IR
         #[arg(long)]
         emit_llvm: bool,
-        
+
         /// Show parsing output
         #[arg(long)]
         show_parse: bool,
@@ -32,11 +32,11 @@ enum Commands {
     Build {
         /// Source file to compile
         file: String,
-        
+
         /// Emit LLVM IR
         #[arg(long)]
         emit_llvm: bool,
-        
+
         /// Show parsing output
         #[arg(long)]
         show_parse: bool,
@@ -57,11 +57,11 @@ enum Commands {
     BuildAndRun {
         /// Source file to compile and run
         file: String,
-        
+
         /// Emit LLVM IR
         #[arg(long)]
         emit_llvm: bool,
-        
+
         /// Show parsing output
         #[arg(long)]
         show_parse: bool,
@@ -87,10 +87,10 @@ fn run_jit(source: &str, emit_llvm: bool, show_parse: bool) -> Result<(), String
         println!("Parse result:");
         println!("{:?}", program);
     }
-    
+
     let context = Context::create();
     let mut codegen = CodeGen::new(&context, "main");
-    
+
     codegen.generate(program)?;
 
     if emit_llvm {
@@ -103,9 +103,9 @@ fn run_jit(source: &str, emit_llvm: bool, show_parse: bool) -> Result<(), String
 }
 
 fn build(
-    source: &str, 
-    output: &str, 
-    emit_llvm: bool, 
+    source: &str,
+    output: &str,
+    emit_llvm: bool,
     show_parse: bool,
     libs: &[String],
     lib_paths: &[String],
@@ -129,17 +129,15 @@ fn build(
         println!("{:#?}", ir);
     }
 
-    fs::write("output.ll", ir)
-        .map_err(|e| format!("Failed to write IR: {}", e))?;
+    fs::write("output.ll", ir).map_err(|e| format!("Failed to write IR: {}", e))?;
 
     let llc_status = Command::new("llc")
         .args([
-            "-opaque-pointers",
             "-filetype=obj",
             "-relocation-model=pic",
             "output.ll",
             "-o",
-            "output.o"
+            "output.o",
         ])
         .status()
         .map_err(|e| format!("Failed to run llc: {}", e))?;
@@ -151,11 +149,17 @@ fn build(
 
     let mut clang_args = vec![
         "output.o".to_string(),
+        "./runtime/cache_runtime.c".to_string(),
         "-o".to_string(),
         output.to_string(),
-        "-fPIE".to_string(),
-        "-pie".to_string(),
     ];
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        clang_args.push("-fPIE".to_string());
+        clang_args.push("-pie".to_string());
+        clang_args.push("-lm".to_string());
+    }
 
     for path in lib_paths {
         clang_args.push("-L".to_string());
@@ -171,8 +175,6 @@ fn build(
         clang_args.push("-l".to_string());
         clang_args.push(lib.clone());
     }
-
-    clang_args.push("-lm".to_string());
 
     let clang_status = Command::new("clang")
         .args(&clang_args)
@@ -194,45 +196,75 @@ fn main() {
     let cli = Cli::parse();
 
     match &cli.command {
-        Commands::Run { file, emit_llvm, show_parse } => {
-            match fs::read_to_string(file) {
-                Ok(source) => {
-                    if let Err(e) = run_jit(&source, *emit_llvm, *show_parse) {
-                        eprintln!("Error: {}", e);
-                    }
+        Commands::Run {
+            file,
+            emit_llvm,
+            show_parse,
+        } => match fs::read_to_string(file) {
+            Ok(source) => {
+                if let Err(e) = run_jit(&source, *emit_llvm, *show_parse) {
+                    eprintln!("Error: {}", e);
                 }
-                Err(e) => eprintln!("Error reading file: {}", e),
             }
-        }
-        Commands::Build { file, emit_llvm, show_parse, libs, lib_paths, include_paths } => {
+            Err(e) => eprintln!("Error reading file: {}", e),
+        },
+        Commands::Build {
+            file,
+            emit_llvm,
+            show_parse,
+            libs,
+            lib_paths,
+            include_paths,
+        } => match fs::read_to_string(file) {
+            Ok(source) => {
+                let output = file.trim_end_matches(".x");
+                if let Err(e) = build(
+                    &source,
+                    output,
+                    *emit_llvm,
+                    *show_parse,
+                    libs,
+                    lib_paths,
+                    include_paths,
+                ) {
+                    eprintln!("Error: {}", e);
+                }
+            }
+            Err(e) => eprintln!("Error reading file: {}", e),
+        },
+        Commands::BuildAndRun {
+            file,
+            emit_llvm,
+            show_parse,
+            libs,
+            lib_paths,
+            include_paths,
+        } => {
             match fs::read_to_string(file) {
                 Ok(source) => {
                     let output = file.trim_end_matches(".x");
-                    if let Err(e) = build(&source, output, *emit_llvm, *show_parse, libs, lib_paths, include_paths) {
-                        eprintln!("Error: {}", e);
-                    }
-                }
-                Err(e) => eprintln!("Error reading file: {}", e),
-            }
-        }
-        Commands::BuildAndRun { file, emit_llvm, show_parse, libs, lib_paths, include_paths } => {
-            match fs::read_to_string(file) {
-                Ok(source) => {
-                    let output = file.trim_end_matches(".x");
-                    if let Err(e) = build(&source, output, *emit_llvm, *show_parse, libs, lib_paths, include_paths) {
+                    if let Err(e) = build(
+                        &source,
+                        output,
+                        *emit_llvm,
+                        *show_parse,
+                        libs,
+                        lib_paths,
+                        include_paths,
+                    ) {
                         eprintln!("Error: {}", e);
                         return;
                     }
-                    
+
                     let status = Command::new(format!("./{}", output))
                         .status()
                         .unwrap_or_else(|e| {
                             eprintln!("Failed to run program: {}", e);
                             std::process::exit(1);
                         });
-                    
+
                     fs::remove_file(output).ok();
-                    
+
                     if !status.success() {
                         eprintln!("Program exited with error");
                     }
