@@ -101,6 +101,8 @@ pub enum Statement {
         name: String,
         params: Vec<String>,
         body: Box<Vec<Statement>>,
+        is_pure: bool,
+        is_memoised: bool,
     },
     ExternFunctionDecl {
         name: String,
