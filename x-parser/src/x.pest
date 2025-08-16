@@ -9,7 +9,10 @@ extern_params = { extern_param ~ ("," ~ extern_param)* }
 extern_param = { identifier ~ ":" ~ type_specifier }
 type_specifier = @{ identifier }
 
-function_def = { "fn" ~ identifier ~ "(" ~ params? ~ ")" ~ block }
+memoised_keyword = @{ "memoised" | "memoized" }
+pure_keyword     = @{ "pure" }
+function_def = { memoised_keyword? ~ pure_keyword? ~ "fn" ~ identifier ~ "(" ~ params? ~ ")" ~ block }
+
 params = { identifier ~ ("," ~ identifier)* }
 block = { "{" ~ (statement* ~ block_expr?)? ~ "}" }
 block_expr = { expr ~ ";"? }
