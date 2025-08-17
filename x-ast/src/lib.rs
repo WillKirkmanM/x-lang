@@ -112,6 +112,9 @@ pub enum Statement {
     Block {
         statements: Vec<Statement>,
     },
+    Become {
+        call: Expr,
+    },
     Comment(String),
     ForLoop {
         var: String,

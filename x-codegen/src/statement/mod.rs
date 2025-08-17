@@ -36,6 +36,10 @@ impl<'ctx> CodeGen<'ctx> {
 
                 Ok(None)
             }
+            Statement::Become { call } => {
+                self.gen_become(call)?;
+                Ok(None)
+            }
             Statement::Import { module, item } => {
                 self.process_import(module, item)?;
                 Ok(None)

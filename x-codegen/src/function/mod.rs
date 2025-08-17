@@ -459,6 +459,8 @@ impl<'ctx> CodeGen<'ctx> {
             );
         }
 
+        self.fn_param_names.insert(name.to_string(), params.to_vec());
+
         let mut last_val: Option<BasicValueEnum<'ctx>> = None;
         for stmt in body {
             if self

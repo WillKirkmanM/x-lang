@@ -26,6 +26,7 @@ pub mod statement;
 pub mod r#struct;
 pub mod r#while;
 pub use extern_fn::*;
+pub mod r#become;
 pub mod memoise;
 
 pub struct CodeGen<'ctx> {
@@ -46,6 +47,7 @@ pub struct CodeGen<'ctx> {
     processed_files: HashSet<String>,
     current_function: Option<FunctionValue<'ctx>>,
     memoisation_caches: HashMap<String, (GlobalValue<'ctx>, BasicTypeEnum<'ctx>)>,
+    fn_param_names: HashMap<String, Vec<String>>,
 }
 
 impl<'ctx> CodeGen<'ctx> {
@@ -78,6 +80,7 @@ impl<'ctx> CodeGen<'ctx> {
             processed_files: HashSet::new(),
             current_function: None,
             memoisation_caches: HashMap::new(),
+            fn_param_names: HashMap::new(),
         }
     }
 
@@ -217,10 +220,7 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(())
     }
 
-    fn process_struct_declarations(
-        &mut self,
-        all_statements: &[Statement],
-    ) -> Result<(), String> {
+    fn process_struct_declarations(&mut self, all_statements: &[Statement]) -> Result<(), String> {
         for stmt in all_statements {
             if let Statement::StructDecl(struct_def) = stmt {
                 self.declare_struct(struct_def)?;
@@ -229,10 +229,7 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(())
     }
 
-    fn declare_all_functions(
-        &mut self,
-        all_statements: &[Statement],
-    ) -> Result<(), String> {
+    fn declare_all_functions(&mut self, all_statements: &[Statement]) -> Result<(), String> {
         use std::string::String;
         let mut sigs: HashMap<String, Vec<BasicTypeEnum<'ctx>>> = HashMap::new();
 
@@ -319,16 +316,33 @@ impl<'ctx> CodeGen<'ctx> {
                         let metadata_types: Vec<BasicMetadataTypeEnum<'ctx>> =
                             ptypes.iter().map(|&ty| ty.into()).collect();
 
-                        let return_type: Option<BasicTypeEnum<'ctx>> = match body.last() {
-                            Some(Statement::Expression { .. }) => {
-                                println!("[CodeGen] Function '{}' inferred return type: f64 (from last expr)", name);
+                        let return_type: Option<BasicTypeEnum<'ctx>> = {
+                            let has_value_return = body.iter().any(|stmt| {
+                                matches!(stmt, Statement::Return { value: Some(_) })
+                                    || matches!(stmt, Statement::Expression { .. })
+                                    || if let Statement::If {
+                                        then_block,
+                                        else_block,
+                                        ..
+                                    } = stmt
+                                    {
+                                        matches!(
+                                            then_block.last(),
+                                            Some(Statement::Expression { .. })
+                                        ) || if let Some(eb) = else_block {
+                                            matches!(eb.last(), Some(Statement::Expression { .. }))
+                                        } else {
+                                            false
+                                        }
+                                    } else {
+                                        false
+                                    }
+                            });
+
+                            if has_value_return {
+                                println!("[CodeGen] Function '{}' inferred return type: f64", name);
                                 Some(self.context.f64_type().as_basic_type_enum())
-                            }
-                            Some(Statement::Return { value: Some(_) }) => {
-                                println!("[CodeGen] Function '{}' inferred return type: f64 (from return stmt)", name);
-                                Some(self.context.f64_type().as_basic_type_enum())
-                            }
-                            _ => {
+                            } else {
                                 println!(
                                     "[CodeGen] Function '{}' inferred return type: void",
                                     name
@@ -420,7 +434,14 @@ impl<'ctx> CodeGen<'ctx> {
 
         println!("[CodeGen] Starting function compilation pass...");
         for stmt in &all_statements {
-            if let Statement::Function { name, params, body, is_pure, is_memoised } = stmt {
+            if let Statement::Function {
+                name,
+                params,
+                body,
+                is_pure,
+                is_memoised,
+            } = stmt
+            {
                 println!("[CodeGen] Processing function: {}", name);
                 if *is_memoised {
                     if !*is_pure {
@@ -432,13 +453,20 @@ impl<'ctx> CodeGen<'ctx> {
                     println!("[CodeGen] Applying memoisation transform to '{}'", name);
                     match self.compile_memoised_function(name, params, body) {
                         Ok(func) => self.register_function(name.clone(), func),
-                        Err(e) => return Err(format!("Failed to compile memoised function {}: {}", name, e)),
+                        Err(e) => {
+                            return Err(format!(
+                                "Failed to compile memoised function {}: {}",
+                                name, e
+                            ))
+                        }
                     }
                 } else {
                     println!("[CodeGen] Compiling standard function body: {}", name);
                     match self.compile_function(name, params, body, *is_pure, *is_memoised) {
                         Ok(func) => self.register_function(name.clone(), func),
-                        Err(e) => return Err(format!("Failed to compile function {}: {}", name, e)),
+                        Err(e) => {
+                            return Err(format!("Failed to compile function {}: {}", name, e))
+                        }
                     }
                 }
             }
@@ -460,34 +488,53 @@ impl<'ctx> CodeGen<'ctx> {
                 let cache_ptr_type = self.context.ptr_type(AddressSpace::default());
                 let i32_type = self.context.i32_type();
                 let create_fn_type = cache_ptr_type.fn_type(&[i32_type.into()], false);
-                let create_fn = self.module.add_function("cache_create", create_fn_type, None);
+                let create_fn = self
+                    .module
+                    .add_function("cache_create", create_fn_type, None);
 
                 for name in self.memoisation_caches.keys() {
                     let cache_global_name = format!("{}_cache", name);
-                    let cache_global = self.module.get_global(&cache_global_name).ok_or_else(|| {
-                        format!("Expected global '{}' not found in module", cache_global_name)
-                    })?;
+                    let cache_global =
+                        self.module.get_global(&cache_global_name).ok_or_else(|| {
+                            format!(
+                                "Expected global '{}' not found in module",
+                                cache_global_name
+                            )
+                        })?;
 
                     let capacity = i32_type.const_int(1024, false);
-                    let new_cache_ptr = self.builder.build_call(create_fn, &[capacity.into()], "create_cache")
-                        .unwrap().try_as_basic_value().left().unwrap();
+                    let new_cache_ptr = self
+                        .builder
+                        .build_call(create_fn, &[capacity.into()], "create_cache")
+                        .unwrap()
+                        .try_as_basic_value()
+                        .left()
+                        .unwrap();
 
-                    self.builder.build_store(cache_global.as_pointer_value(), new_cache_ptr).unwrap();
+                    self.builder
+                        .build_store(cache_global.as_pointer_value(), new_cache_ptr)
+                        .unwrap();
                     println!("[CodeGen] Initialized cache for '{}' in main.", name);
                 }
             }
 
             for stmt in program.statements.iter() {
                 match stmt {
-                    Statement::Function { .. } | Statement::ExternFunctionDecl { .. } |
-                    Statement::FileImport { .. } | Statement::Import { .. } | Statement::StructDecl(_) => continue,
-                    _ => { self.gen_statement(stmt)?; }
+                    Statement::Function { .. }
+                    | Statement::ExternFunctionDecl { .. }
+                    | Statement::FileImport { .. }
+                    | Statement::Import { .. }
+                    | Statement::StructDecl(_) => continue,
+                    _ => {
+                        self.gen_statement(stmt)?;
+                    }
                 }
             }
 
             let success_code = self.context.f64_type().const_float(0.0);
-            self.builder.build_return(Some(&success_code)).map_err(|e| e.to_string())?;
-
+            self.builder
+                .build_return(Some(&success_code))
+                .map_err(|e| e.to_string())?;
         } else {
             println!("[CodeGen] 'main' function already has body, skipping wrapper population.");
         }
