@@ -1,12 +1,12 @@
 use pest::iterators::Pair;
 use x_ast::Statement;
 
-use crate::{expression::parse_expr, extern_fn::parse_extern_fn_decl, function::parse_function_def, r#return::parse_return_statement, r#struct::parse_struct_decl, r#while::parse_while_loop, Rule};
+use crate::{expression::parse_expr, extern_fn::parse_extern_fn_decl, function::{parse_function_call, parse_function_def}, r#return::parse_return_statement, r#struct::parse_struct_decl, r#while::parse_while_loop, Rule};
 
 pub fn parse_statement(pair: Pair<Rule>) -> Statement {
     match pair.as_rule() {
         Rule::statement => {
-            let inner = pair.into_inner().next().unwrap();
+            let inner = pair.clone().into_inner().next().unwrap();
             match inner.as_rule() {
                 Rule::if_stmt => {
                     let mut inner_if = inner.into_inner();
@@ -72,6 +72,12 @@ pub fn parse_statement(pair: Pair<Rule>) -> Statement {
                 Rule::struct_decl => parse_struct_decl(inner),
                 Rule::COMMENT => Statement::Comment(inner.as_str().trim_start_matches("//").trim().to_string()),
                 Rule::return_stmt => parse_return_statement(inner),
+                Rule::become_stmt => {
+                    let call_pair = inner.into_inner().next().unwrap();
+                    Statement::Become {
+                        call: parse_function_call(call_pair),
+                    }
+                }
                 _ => unreachable!("Unexpected rule in statement: {:?}", inner.as_rule())
             }
         },
