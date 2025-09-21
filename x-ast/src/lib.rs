@@ -1,25 +1,34 @@
+use std::{collections::HashMap, hash::Hash};
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Operator {
     Add,
     Subtract,
     Multiply,
     Divide,
+    Modulo,
+    ShiftLeft,
+    ShiftRight,
+    BitAnd,
+    Xor,
     LessThan,
     GreaterThan,
     LessThanOrEqual,
     GreaterThanOrEqual,
     Equal,
     NotEqual,
-    Assign,
     Or,
     And,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
-    Number(f64),
+    Int(i64),
+    Float(f64),
     String(StringLiteral),
+    Boolean(bool),
     Identifier(String),
+    TypeLiteral(Type),
     BinaryOp {
         left: Box<Expr>,
         op: Operator,
@@ -32,6 +41,7 @@ pub enum Expr {
     AnonymousFunction {
         params: Vec<String>,
         body: Vec<Statement>,
+        return_type: Option<Type>,
     },
     Array(Vec<Expr>),
     ArrayAccess {
@@ -49,6 +59,13 @@ pub enum Expr {
     },
     UnaryOp {
         op: UnaryOperator,
+        expr: Box<Expr>,
+    },
+    AddressOf {
+        is_mut: bool,
+        expr: Box<Expr>,
+    },
+    Deref {
         expr: Box<Expr>,
     },
 }
@@ -88,6 +105,7 @@ pub enum Statement {
     },
     VariableDecl {
         name: String,
+        type_ann: Option<Type>,
         value: Expr,
     },
     Import {
@@ -99,10 +117,14 @@ pub enum Statement {
     },
     Function {
         name: String,
-        params: Vec<String>,
-        body: Box<Vec<Statement>>,
+        generic_params: Option<Vec<String>>,
+        params: Vec<(String, Type)>,
+        return_type: Type,
+        body: Option<Box<Vec<Statement>>>,
         is_pure: bool,
         is_memoised: bool,
+        is_multi: bool,
+        is_throws: bool,
     },
     ExternFunctionDecl {
         name: String,
@@ -116,7 +138,7 @@ pub enum Statement {
         call: Expr,
     },
     Comment(String),
-    ForLoop {
+    ForRangeLoop {
         var: String,
         start: Box<Expr>,
         end: Box<Expr>,
@@ -131,7 +153,16 @@ pub enum Statement {
         condition: Expr,
         body: Vec<Statement>,
     },
+    ForEachLoop {
+        var: String,
+        iterator: Box<Expr>,
+        body: Vec<Statement>,
+    },
+
     StructDecl(StructDef),
+    TraitDecl(TraitDef),
+    ImplDecl(ImplDef),
+
     Return {
         value: Option<Expr>,
     },
@@ -146,7 +177,8 @@ pub struct ExternParam {
 #[derive(Debug, Clone, PartialEq)]
 pub struct StructDef {
     pub name: String,
-    pub fields: Vec<String>,
+    pub generic_params: Option<Vec<String>>,
+    pub fields: Vec<(String, Type)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -169,4 +201,59 @@ pub enum UnaryOperator {
     PreDecrement,
     PostIncrement,
     PostDecrement,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Type {
+    Int,
+    Float,
+    String,
+    Bool,
+    Void,
+    Custom(String),
+    Unknown,
+    Array(Box<Type>),
+    TypeParameter(String),
+    GenericInstance { name: String, type_args: Vec<Type> },
+    Ref { is_mut: bool, inner: Box<Type> },
+}
+
+impl std::fmt::Display for Type {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Type::Int => write!(f, "i32"),
+            Type::Float => write!(f, "f64"),
+            Type::Bool => write!(f, "bool"),
+            Type::String => write!(f, "str"),
+            Type::Void => write!(f, "void"),
+            Type::Custom(s) => write!(f, "{}", s),
+            Type::Unknown => write!(f, "unknown"),
+            Type::Array(inner) => write!(f, "{}[]", inner),
+            Type::TypeParameter(name) => write!(f, "{}", name),
+            Type::GenericInstance { name, type_args } => {
+                let args = type_args
+                    .iter()
+                    .map(|t| format!("{}", t))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, "{}<{}>", name, args)
+            }
+            Type::Ref { is_mut, inner } => {
+                write!(f, "&{}{}", if *is_mut { "mut " } else { "" }, inner)
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TraitDef {
+    pub name: String,
+    pub methods: HashMap<String, Option<Statement>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImplDef {
+    pub trait_name: String,
+    pub type_name: Type,
+    pub methods: Vec<Statement>,
 }
