@@ -7,10 +7,14 @@ use x_ast::Program;
 pub mod anonymous_function;
 pub mod array;
 pub mod block;
+pub mod boolean;
 pub mod expression;
 pub mod extern_fn;
+pub mod r#for;
 pub mod function;
 pub mod identifier;
+pub mod r#if;
+pub mod import;
 pub mod number;
 pub mod postfix_op;
 pub mod prefix_op;
@@ -19,6 +23,7 @@ pub mod statement;
 pub mod string;
 pub mod r#struct;
 pub mod term;
+pub mod types;
 pub mod r#while;
 
 #[derive(Parser)]
