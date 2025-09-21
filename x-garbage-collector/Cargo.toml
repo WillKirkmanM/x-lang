@@ -1,0 +1,6 @@
+[package]
+name = "x-garbage-collector"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
