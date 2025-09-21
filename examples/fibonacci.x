@@ -1,38 +1,38 @@
-import std::print;
-
-fn fibonacci_recursive(n) {
-    if n <= 1 {
-        n;
+fn fibonacci_recursive(n: f64) -> f64 {
+    if n <= 1.0 {
+        return n;
     } else {
-        fibonacci_recursive(n - 1) + fibonacci_recursive(n - 2);
+        return fibonacci_recursive(n - 1.0) + fibonacci_recursive(n - 2.0);
     }
 }
 
-fn fibonacci_iterative(n) {
-    if n <= 1 {
+fn fibonacci_iterative(n: f64) -> f64 {
+    if n <= 1.0 {
         return n;
     }
     
-    let a = 0;
-    let b = 1;
-    let i = 2;
+    let mut a: f64 = 0.0;
+    let mut b: f64 = 1.0;
+    let mut i: f64 = 2.0;
     
     while i <= n {
-        let temp = a + b;
+        let temp: f64 = a + b;
         a = b;
         b = temp;
-        i = i + 1;
+        i = i + 1.0;
     }
     
     return b;
 }
 
-print("Recursive Fibonacci:");
-for i in 0..10 {
-    print(fibonacci_recursive(i));
-}
+fn main() {
+    print_str("Recursive Fibonacci:");
+    for i in 0.0..10.0 {
+        print(fibonacci_recursive(i));
+    }
 
-print("Iterative Fibonacci:");
-for i in 0..10 {
-    print(fibonacci_iterative(i));
+    print_str("Iterative Fibonacci:");
+    for i in 0.0..10.0 {
+        print(fibonacci_iterative(i));
+    }
 }

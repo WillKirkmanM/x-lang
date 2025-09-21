@@ -1,9 +1,9 @@
 // Memoised pure function `six`.
 // In LLVM IR, this becomes: 
-// - a memoizing wrapper @six(double), implementing cache checks/miss/set
+// - a memoising wrapper @six(double), implementing cache checks/miss/set
 // - the actual function body is in @six.impl(double)
 // - the cache is stored in the @six_cache global variable.
-memoised pure fn six(x) {
+memoised pure fn six(x) -> f64 {
     x - 1   // Implemented in @six.impl(double): loads x, subtracts 1.0, returns result
 }
 
@@ -20,9 +20,9 @@ print(six(8));
 
 // Memoised pure function with no arguments.
 // In LLVM IR, this maps to:
-// - a memoizing wrapper @how_many() with same caching logic as `six`, backed by @how_many.impl()
+// - a memoising wrapper @how_many() with same caching logic as `six`, backed by @how_many.impl()
 // - the cache is in @how_many_cache
-memoized pure fn how_many() {
+memoized pure fn how_many() -> f64 {
     3      // Implemented in @how_many.impl(): just returns 3.0
 }
 

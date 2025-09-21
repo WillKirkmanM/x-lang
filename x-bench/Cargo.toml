@@ -1,0 +1,10 @@
+[package]
+name = "x-bench"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+html-escape = "0.2.13"
+indicatif = "0.18.0"
+plotters = "0.3.7"

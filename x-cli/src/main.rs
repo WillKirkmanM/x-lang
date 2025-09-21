@@ -1,9 +1,12 @@
 use clap::{Parser, Subcommand};
 use inkwell::context::Context;
 use std::fs;
+use std::path::PathBuf;
 use std::process::Command;
+use x_borrow_checker::BorrowChecker;
 use x_codegen::CodeGen;
 use x_parser::parse;
+use x_typechecker::TypeChecker;
 
 #[derive(Parser)]
 #[command(name = "x")]
@@ -52,6 +55,10 @@ enum Commands {
         /// Include paths (-I flag)
         #[arg(long = "include", short = 'I')]
         include_paths: Vec<String>,
+
+        /// LLVM optimisation level (0-3)
+        #[arg(short = 'O', long, default_value_t = 0, value_parser = clap::value_parser!(u8).range(0..=3))]
+        opt_level: u8,
     },
     /// Build and run the executable
     BuildAndRun {
@@ -77,6 +84,10 @@ enum Commands {
         /// Include paths (-I flag)
         #[arg(long = "include", short = 'I')]
         include_paths: Vec<String>,
+
+        /// LLVM optimisation level (0-3)
+        #[arg(short = 'O', long, default_value_t = 0, value_parser = clap::value_parser!(u8).range(0..=3))]
+        opt_level: u8,
     },
 }
 
@@ -91,7 +102,17 @@ fn run_jit(source: &str, emit_llvm: bool, show_parse: bool) -> Result<(), String
     let context = Context::create();
     let mut codegen = CodeGen::new(&context, "main");
 
-    codegen.generate(program)?;
+    let mut checker = TypeChecker::new();
+    let typed_program = checker
+        .check(program)
+        .map_err(|e| format!("Type error: {e}"))?;
+
+    let mut borrow_checker = BorrowChecker::new();
+    borrow_checker
+        .check(&typed_program)
+        .map_err(|e| format!("Borrow error: {e}"))?;
+
+    codegen.generate(typed_program)?;
 
     if emit_llvm {
         println!("Generated LLVM IR:");
@@ -110,18 +131,33 @@ fn build(
     libs: &[String],
     lib_paths: &[String],
     include_paths: &[String],
+    opt_level: u8,
 ) -> Result<(), String> {
     let program = parse(source).map_err(|e| format!("Parse error: {}", e))?;
 
     if show_parse {
         println!("Parse result:");
-        println!("{:#?}", program);
+        println!("{:?}", program);
     }
 
     let context = Context::create();
+
     let mut codegen = CodeGen::new(&context, "main");
 
-    codegen.generate(program)?;
+    let mut checker = TypeChecker::new();
+    let typed_program = checker
+        .check(program)
+        .map_err(|e| format!("Type error: {e}"))?;
+
+    let mut borrow_checker = BorrowChecker::new();
+    borrow_checker
+        .check(&typed_program)
+        .map_err(|e| format!("Borrow error: {e}"))?;
+
+    codegen.register_traits(&typed_program);
+    codegen.register_methods(&typed_program);
+
+    codegen.generate(typed_program)?;
 
     let ir = codegen.get_ir();
     if emit_llvm {
@@ -131,8 +167,11 @@ fn build(
 
     fs::write("output.ll", ir).map_err(|e| format!("Failed to write IR: {}", e))?;
 
+    let opt_level_arg = format!("-O{}", opt_level); // Create the -O<level> string
+
     let llc_status = Command::new("llc")
         .args([
+            opt_level_arg.as_str(),
             "-filetype=obj",
             "-relocation-model=pic",
             "output.ll",
@@ -149,7 +188,24 @@ fn build(
 
     let mut clang_args = vec![
         "output.o".to_string(),
-        "./runtime/cache_runtime.c".to_string(),
+        // Embed cache runtime at compile time and write it out for the linker
+        {
+            let runtime_c = format!(
+                "{}\n\nint __xlang_type_id(void* p) {{ (void)p; return 0; }}\n",
+                include_str!("../../runtime/cache_runtime.c")
+            );
+            let runtime_h = format!(
+                "{}\n\nint __xlang_type_id(void* p);\n",
+                include_str!("../../runtime/cache_runtime.h")
+            );
+            let runtime_c_path = "cache_runtime.c";
+            let runtime_h_path = "cache_runtime.h";
+            fs::write(runtime_h_path, runtime_h)
+                .map_err(|e| format!("Failed to write runtime header: {}", e))?;
+            fs::write(runtime_c_path, runtime_c)
+                .map_err(|e| format!("Failed to write runtime C: {}", e))?;
+            runtime_c_path.to_string()
+        },
         "-o".to_string(),
         output.to_string(),
     ];
@@ -193,6 +249,8 @@ fn build(
 }
 
 fn main() {
+    x_logging::init();
+
     let cli = Cli::parse();
 
     match &cli.command {
@@ -215,6 +273,7 @@ fn main() {
             libs,
             lib_paths,
             include_paths,
+            opt_level,
         } => match fs::read_to_string(file) {
             Ok(source) => {
                 let output = file.trim_end_matches(".x");
@@ -226,6 +285,7 @@ fn main() {
                     libs,
                     lib_paths,
                     include_paths,
+                    *opt_level,
                 ) {
                     eprintln!("Error: {}", e);
                 }
@@ -239,6 +299,7 @@ fn main() {
             libs,
             lib_paths,
             include_paths,
+            opt_level,
         } => {
             match fs::read_to_string(file) {
                 Ok(source) => {
@@ -251,22 +312,52 @@ fn main() {
                         libs,
                         lib_paths,
                         include_paths,
+                        *opt_level,
                     ) {
                         eprintln!("Error: {}", e);
                         return;
                     }
 
-                    let status = Command::new(format!("./{}", output))
-                        .status()
-                        .unwrap_or_else(|e| {
-                            eprintln!("Failed to run program: {}", e);
-                            std::process::exit(1);
-                        });
+                    let mut run_path = PathBuf::from(output);
+                    if !run_path.exists() {
+                        let try_exe = run_path.with_extension("exe");
+                        if try_exe.exists() {
+                            run_path = try_exe;
+                        } else {
+                            if let Some(parent) = run_path.parent() {
+                                if let Some(stem) = run_path.file_stem().and_then(|s| s.to_str()) {
+                                    if let Ok(entries) = fs::read_dir(parent) {
+                                        for ent in entries.flatten() {
+                                            let p = ent.path();
+                                            if let Some(pstem) =
+                                                p.file_stem().and_then(|s| s.to_str())
+                                            {
+                                                if pstem == stem {
+                                                    run_path = p;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
 
-                    fs::remove_file(output).ok();
+                    if !run_path.exists() {
+                        eprintln!("Failed to find built artifact at '{}'", output);
+                        std::process::exit(1);
+                    }
+
+                    let status = Command::new(&run_path).status().unwrap_or_else(|e| {
+                        eprintln!("Failed to run program: {}", e);
+                        std::process::exit(1);
+                    });
+
+                    fs::remove_file(&run_path).ok();
 
                     if !status.success() {
-                        eprintln!("Program exited with error");
+                        // eprintln!("Program exited with error");
                     }
                 }
                 Err(e) => eprintln!("Error reading file: {}", e),

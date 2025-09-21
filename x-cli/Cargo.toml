@@ -7,6 +7,9 @@ edition = "2021"
 x-codegen = { path = "../x-codegen" }
 x-parser = { path = "../x-parser" }
 x-ast = { path = "../x-ast" }
+x-borrow-checker = { path = "../x-borrow-checker" }
+x-typechecker = { path = "../x-typechecker" }
+x-logging = { path = "../x-logging" }
 clap = { version = "4.5.27", features = ["derive"] }
 inkwell = { version = "0.6.0", features = ["llvm18-1"] }
 log = "0.4.25"

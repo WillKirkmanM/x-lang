@@ -1,0 +1,18 @@
+[package]
+name = "x-tests"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+x-diagnostics = { path = "../x-diagnostics" }
+x-codegen = { path = "../x-codegen" }
+x-ast = { path = "../x-ast" }
+x-parser = { path = "../x-parser" }
+x-typechecker = { path = "../x-typechecker" }
+x-borrow-checker = { path = "../x-borrow-checker" }
+x-logging = { path = "../x-logging" }
+inkwell = { version = "0.6.0", features = ["llvm18-1"] }
+
+[dev-dependencies]
+assert_cmd = "2.0.17"
+predicates = "3.1.3"

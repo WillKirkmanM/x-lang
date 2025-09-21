@@ -1,103 +1,219 @@
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" | COMMENT }
-COMMENT = _{ "//" ~ (!NEWLINE ~ ANY)* ~ NEWLINE }
+COMMENT    = _{ "//" ~ (!NEWLINE ~ ANY)* }
+NEWLINE    = _{ "\n" }
 
-program = { SOI ~ statement* ~ EOI }
-statement = { extern_fn_decl | struct_decl | if_stmt | for_loop | while_loop | function_def | return_stmt | (var_decl | import | expr) ~ ";" }
+ASCII_LOWER = _{ 'a'..'z' }
+ASCII_UPPER = _{ 'A'..'Z' }
 
-extern_fn_decl = { "extern" ~ "fn" ~ identifier ~ "(" ~ extern_params? ~ ")" ~ ( "->" ~ type_specifier )? ~ ";" }
-extern_params = { extern_param ~ ("," ~ extern_param)* }
-extern_param = { identifier ~ ":" ~ type_specifier }
-type_specifier = @{ identifier }
+ID_CONT = _{ ASCII_ALPHANUMERIC | "_" }
 
-memoised_keyword = @{ "memoised" | "memoized" }
-pure_keyword     = @{ "pure" }
-function_def = { memoised_keyword? ~ pure_keyword? ~ "fn" ~ identifier ~ "(" ~ params? ~ ")" ~ block }
-
-params = { identifier ~ ("," ~ identifier)* }
-block = { "{" ~ (statement* ~ block_expr?)? ~ "}" }
-block_expr = { expr ~ ";"? }
-
-import = { "import" ~ (module_import | file_import) }
-module_import = { module ~ "::" ~ item }
-file_import = { string_path }
-string_path = @{ "\"" ~ (!("\"" | "\\") ~ ANY)* ~ "\"" }
-module = @{ identifier }
-item = @{ identifier }
-
-var_decl = { "let" ~ identifier ~ "=" ~ expr }
-if_stmt = { "if" ~ expr ~ block ~ ("else" ~ block)? }
-for_loop = { "for" ~ identifier ~ "in" ~ expr ~ ".." ~ expr ~ block }
-while_loop = { "while" ~ expr ~ block }
-
-expr = { term ~ (operator ~ term)* }
-
-term = { 
-    anonymous_fn | 
-    prefix_op | 
-    postfix_op |
-    primary
+kw_mut    = { "mut" }
+keyword = _{
+    "fn" ~ !ID_CONT
+  | "let" ~ !ID_CONT
+  | "struct" ~ !ID_CONT
+  | "return" ~ !ID_CONT
+  | "if" ~ !ID_CONT
+  | "else" ~ !ID_CONT
+  | "true" ~ !ID_CONT
+  | "false" ~ !ID_CONT
+  | "import" ~ !ID_CONT
+  | "from" ~ !ID_CONT
+  | "pure" ~ !ID_CONT
+  | "memoised" ~ !ID_CONT
+  | "memoise" ~ !ID_CONT
+  | "memoized" ~ !ID_CONT
+  | "memoize" ~ !ID_CONT
+  | "multi" ~ !ID_CONT
+  | "throws" ~ !ID_CONT
+  | "extern" ~ !ID_CONT
+  | "become" ~ !ID_CONT
+  | "while" ~ !ID_CONT
+  | "for" ~ !ID_CONT
+  | "in" ~ !ID_CONT
+  | "trait" ~ !ID_CONT
+  | "impl" ~ !ID_CONT
+  | kw_mut ~ !ID_CONT
 }
 
-primary = { 
-    number | 
+value_identifier = @{ !keyword ~ ASCII_LOWER ~ (ASCII_ALPHANUMERIC | "_")* }
+type_identifier  = @{ !keyword ~ ASCII_UPPER ~ (ASCII_ALPHANUMERIC | "_")* }
+identifier       = { value_identifier | type_identifier }
+
+lifetime = @{ "'" ~ (ASCII_LOWER | ASCII_UPPER | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+
+integer = @{ "-"? ~ ASCII_DIGIT+ }
+float   = @{ "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
+boolean = { "true" | "false" }
+string_char   = @{ !("\"" | "\\" | "$") ~ ANY }
+interpolation = { "${" ~ (!"}" ~ ANY)+ ~ "}" }
+string_part   = { string_char+ | interpolation }
+string        = { "\"" ~ string_part* ~ "\"" }
+literal       = { float | integer | boolean | string }
+
+basic_type   = { "i32" | "f64" | "bool" | "str" | "void" }
+
+generic_arg = { lifetime | identifier }
+
+custom_type  = { type_identifier ~ ("<" ~ generic_arg ~ ("," ~ generic_arg)* ~ ">")? }
+
+ref_type     = { "&" ~ kw_mut? ~ lifetime? ~ (basic_type | custom_type) ~ array_postfix* }
+array_postfix = { "[]" }
+
+array_type = { "[" ~ type ~ "]" }
+
+type_specifier = { type }
+type = { array_type | ref_type | (basic_type | custom_type) ~ array_postfix* }
+
+generic_param = { lifetime | identifier }
+generic_param_def_list = { "<" ~ generic_param ~ ("," ~ generic_param)* ~ ">" }
+
+program = { SOI ~ statement* ~ EOI }
+
+statement = {
+    block |
+    extern_fn_decl |
+    struct_decl |
+    trait_decl |
+    impl_decl |
+    if_stmt |
+    for_range_loop |
+    for_each_loop |
+    while_loop |
+    function_def |
+    return_stmt |
+    become_stmt |
+    (var_decl | assignment_stmt | import | expr) ~ ";"
+}
+
+extern_fn_decl = { "extern" ~ "fn" ~ identifier ~ "(" ~ extern_params? ~ ")" ~ ( "->" ~ type_specifier )? ~ ";" }
+extern_params  = { extern_param ~ ("," ~ extern_param)* }
+extern_param   = { identifier ~ ":" ~ type_specifier }
+
+modifiers = { "pure" | "memoised" | "memoized" | "memoise" | "memoize" | "multi" | "throws" }
+function_def = { modifiers* ~ "fn" ~ identifier ~ generic_param_def_list? ~ fn_param_list ~ return_type_ann? ~ (block | ";") }
+
+
+memoised_keyword = @{ "memoised" | "memoized" | "memoise" | "memoize" }
+pure_keyword     = @{ "pure" }
+
+fn_param_list = { "(" ~ (param_list_nonempty)? ~ ")" }
+
+param_list_nonempty = { param_item ~ ("," ~ param_item)* }
+
+param_item = { param_self | param_normal }
+
+param_self = { "&" ~ kw_mut? ~ "self" ~ !ID_CONT }
+
+param_normal = { kw_mut? ~ identifier ~ (":" ~ type_specifier)? }
+
+param         = { param_self | kw_mut? ~ identifier ~ (":" ~ type_specifier)? }
+return_type_ann = { "->" ~ type_specifier }
+
+block = { "{" ~ statement* ~ expr? ~ "}" }
+
+var_decl = { "let" ~ kw_mut? ~ identifier ~ (
+    ( ":" ~ type ~ ("=" ~ expr)? ) |
+    ( "=" ~ expr )
+) }
+l_value  = { primary ~ postfix* }
+assign_op = { "=" }
+assignment_stmt = { l_value ~ assign_op ~ expr }
+
+if_stmt        = { "if" ~ expr ~ block ~ ("else" ~ block)? }
+while_loop     = { "while" ~ expr ~ block }
+for_range_loop = { "for" ~ identifier ~ "in" ~ expr ~ ".." ~ expr ~ block }
+for_each_loop  = { "for" ~ identifier ~ "in" ~ expr ~ block }
+become_stmt    = { "become" ~ function_call ~ ";" }
+return_stmt    = { "return" ~ expr? ~ ";" }
+
+import        = { "import" ~ (module_import | file_import) }
+module_import = { module ~ "::" ~ item }
+file_import   = { string_path }
+string_path   = @{ "\"" ~ (!("\"" | "\\") ~ ANY)* ~ "\"" }
+module        = @{ identifier }
+item          = @{ identifier }
+
+addr_of = { "&" ~ kw_mut? ~ term }
+deref   = { "*" ~ term }
+
+expr = { term ~ (operator ~ term)* }
+term = { anonymous_fn | prefix_op | postfix_op | primary }
+prefix_op  = { addr_of | deref | neg_op ~ term | not_op ~ term | bit_not_op ~ term | pre_inc_op ~ term | pre_dec_op ~ term }
+postfix_op = { primary ~ (post_inc_op | post_dec_op | postfix)+ }
+
+primary = {
+    number |
+    boolean |
     function_call |
     struct_instantiate |
-    identifier | 
-    "(" ~ expr ~ ")" | 
-    string | 
+    identifier |
+    "(" ~ expr ~ ")" |
+    string |
     array_literal
 }
 
-prefix_op = { neg_op ~ term | not_op ~ term | bit_not_op ~ term | pre_inc_op ~ term | pre_dec_op ~ term }
-postfix_op = { primary ~ (post_inc_op | post_dec_op | postfix)+ }
+postfix = {
+    "[" ~ expr ~ "]"
+  | "." ~ identifier ~ "(" ~ args? ~ ")"
+  | "." ~ identifier
+}
 
-postfix = { "[" ~ expr ~ "]" | "." ~ identifier }
-
-neg_op = { "-" }
-not_op = { "!" } 
-bit_not_op = { "~" }
-pre_inc_op = { "++" }
-pre_dec_op = { "--" }
+number     = { float | integer }
+neg_op      = { "-" }
+not_op      = { "!" }
+bit_not_op  = { "~" }
+pre_inc_op  = { "++" }
+pre_dec_op  = { "--" }
 post_inc_op = { "++" }
 post_dec_op = { "--" }
 
-anonymous_fn = { "|" ~ params? ~ "|" ~ block }
-
+anonymous_fn  = { "|" ~ (param_list_nonempty)? ~ "|" ~ (return_type_ann)? ~ (block | expr) }
 function_call = { identifier ~ "(" ~ args? ~ ")" }
-args = { expr ~ ("," ~ expr)* }
+args          = { expr ~ ("," ~ expr)* }
 
 array_literal = { "[" ~ (expr ~ ("," ~ expr)*)? ~ "]" }
 
-struct_decl = { "struct" ~ identifier ~ "{" ~ struct_fields? ~ "}" }
-struct_fields = { identifier ~ ("," ~ identifier)* }
-
+struct_field       = { identifier ~ ":" ~ type_specifier }
+struct_decl        = { "struct" ~ identifier ~ generic_param_def_list? ~ "{" ~ struct_fields? ~ ","? ~ "}" }
+struct_fields      = { struct_field ~ ("," ~ struct_field)* }
 struct_instantiate = { identifier ~ "{" ~ struct_init_fields? ~ "}" }
 struct_init_fields = { struct_init_field ~ ("," ~ struct_init_field)* }
-struct_init_field = { identifier ~ ":" ~ expr }
+struct_init_field  = { identifier ~ ":" ~ expr }
 
-return_stmt = { "return" ~ expr? ~ ";" }
+operator = _{ or_op | and_op | eq_op | neq_op | le_op | ge_op
+            | lt_op | gt_op | shl_op | shr_op
+            | add_op | sub_op | mul_op | div_op | mod_op
+            | bit_and_op | xor_op }
 
-operator = _{ or_op | and_op | eq_op | neq_op | le_op | ge_op | lt_op | gt_op | add_op | sub_op | mul_op | div_op | assign_op }
-or_op = { "||" }
+or_op  = { "||" }
 and_op = { "&&" }
-eq_op = { "==" }
+eq_op  = { "==" }
 neq_op = { "!=" }
-le_op = { "<=" }
-ge_op = { ">=" }
-lt_op = { "<" }
-gt_op = { ">" }
+le_op  = { "<=" }
+ge_op  = { ">=" }
+lt_op  = @{ !("<<" | "<=") ~ "<" }
+gt_op  = @{ !(">>" | ">=") ~ ">" }
+shl_op = @{ "<<" }
+shr_op = @{ ">>" }
 add_op = { "+" }
 sub_op = { "-" }
 mul_op = { "*" }
 div_op = { "/" }
-assign_op = { "=" }
+mod_op = { "%" }
+bit_and_op = { "&" }
+xor_op = { "^" }
 
-number = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
-identifier = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
-string = { "\"" ~ inner_str ~ "\"" }
-inner_str = { (interpolation | string_char)* }
-interpolation = { "{" ~ identifier ~ "}" }
-string_char = @{
-    !("{" | "\"") ~ ANY
-}
+trait_method_sig = { "fn" ~ identifier ~ fn_param_list ~ return_type_ann? ~ ";" }
+trait_method_default = { "fn" ~ identifier ~ fn_param_list ~ return_type_ann? ~ block }
 
+trait_item = { function_def }
+
+impl_item = { function_def }
+
+trait_decl = { "trait" ~ identifier ~ "{" ~ trait_item* ~ "}" }
+impl_decl = { "impl" ~ identifier ~ "for" ~ type_specifier ~ "{" ~ impl_item* ~ "}" }
+
+trait_def = { "trait" ~ identifier ~ "{" ~ trait_item* ~ "}" }
+
+impl_def = { "impl" ~ identifier ~ "for" ~ identifier ~ "{" ~ impl_item* ~ "}" }
