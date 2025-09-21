@@ -18,8 +18,16 @@ members = [
     "x-codegen",
     "x-parser",
     "x-ast",
-    "x-cli", 
-    "x-std"
+    "x-cli",
+    "x-std",
+    "x-typechecker",
+    "x-bench",
+    "x-debugger",
+    "x-borrow-checker",
+    "x-garbage-collector",
+    "x-tests",
+    "x-diagnostics",
+    "x-logging",
 ]
 
 [workspace.dependencies]
