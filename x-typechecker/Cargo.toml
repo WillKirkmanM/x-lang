@@ -1,0 +1,8 @@
+[package]
+name = "x-typechecker"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+x-ast = { path = "../x-ast" }
+x-parser = { path = "../x-parser" }
