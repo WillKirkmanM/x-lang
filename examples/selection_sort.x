@@ -1,12 +1,10 @@
-import std::print;
-
-fn selection_sort(arr) {
-    let n = 5;
-    let i = 0;
+fn selection_sort(mut arr: [i32]) -> [i32] {
+    let n: i32 = 5;
+    let mut i: i32 = 0;
     
     while i < n - 1 {
-        let min_idx = i;
-        let j = i + 1;
+        let mut min_idx: i32 = i;
+        let mut j: i32 = i + 1;
         
         while j < n {
             if arr[j] < arr[min_idx] {
@@ -23,22 +21,29 @@ fn selection_sort(arr) {
         
         i = i + 1;
     }
+
+    arr
 }
 
-fn print_array(arr) {
-    let i = 0;
+fn print_array(arr: [i32]) {
+    let mut i: i32 = 0;
     while i < 5 {
-        print(arr[i]);
+        let number_at_index: f64 = arr[i];
+        print(arr[i] );
+        print(number_at_index);
         i = i + 1;
     }
 }
 
-let numbers = [5, 3, 8, 1, 2];
 
-print("Original array:");
-print_array(numbers);
-
-selection_sort(numbers);
-
-print("Sorted array:");
-print_array(numbers);
+fn main() {
+    let numbers: [i32] = [5, 3, 8, 1, 2];
+    
+    print_str("Original array:");
+    print_array(&numbers);
+    
+    let numbers = selection_sort(numbers);
+    
+    print_str("Sorted array:");
+    print_array(&numbers);
+}
