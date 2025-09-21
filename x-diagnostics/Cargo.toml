@@ -1,0 +1,13 @@
+[package]
+name = "x-diagnostics"
+edition.workspace = true
+version.workspace = true
+
+[lib]
+name = "x_diagnostics"
+path = "src/lib.rs"
+
+[dependencies]
+atty = "0.2.14"
+once_cell = "1.21.3"
+unicode-width = "0.2.1"
