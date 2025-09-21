@@ -1,5 +1,5 @@
 pure fn hi() {
-    print("hi");
+    2 + 2
 }
 
 hi();
