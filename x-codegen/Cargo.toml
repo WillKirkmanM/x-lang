@@ -6,13 +6,16 @@ description = "LLVM code generation for X language"
 license = "MIT"
 
 [lib]
-name = "x_codegen" 
+name = "x_codegen"
 path = "src/lib.rs"
 
 [dependencies]
 x-ast = { path = "../x-ast" }
 x-parser = { path = "../x-parser" }
 x-std = { path = "../x-std" }
+x-typechecker = { path = "../x-typechecker" }
+x-diagnostics = { path = "../x-diagnostics" }
+x-logging = { path = "../x-logging" }
 inkwell = { version = "0.6.0", features = ["llvm18-1"] }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
