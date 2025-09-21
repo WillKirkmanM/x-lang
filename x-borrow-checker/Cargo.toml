@@ -1,0 +1,7 @@
+[package]
+name = "x-borrow-checker"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+x-ast = { path = "../x-ast" }
