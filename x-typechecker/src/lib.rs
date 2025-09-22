@@ -50,6 +50,7 @@ pub struct SymbolTable {
     variables: Vec<HashMap<String, Type>>,
     functions: HashMap<String, FunctionSignature>,
     structs: HashMap<String, Vec<(String, Type)>>,
+    struct_methods: HashMap<String, HashMap<String, FunctionSignature>>, // New field
     generic_functions: HashMap<String, FunctionDef>,
     generic_structs: HashMap<String, StructDef>,
     instantiations: HashMap<(String, Vec<String>), String>,
@@ -89,6 +90,25 @@ impl SymbolTable {
     }
     pub fn add_struct(&mut self, name: String, fields: Vec<(String, Type)>) {
         self.structs.insert(name, fields);
+    }
+
+    pub fn add_struct_method(
+        &mut self,
+        struct_name: String,
+        method_name: String,
+        sig: FunctionSignature,
+    ) {
+        self.struct_methods
+            .entry(struct_name)
+            .or_default()
+            .insert(method_name, sig);
+    }
+    pub fn get_struct_method(
+        &self,
+        struct_name: &str,
+        method_name: &str,
+    ) -> Option<&FunctionSignature> {
+        self.struct_methods.get(struct_name)?.get(method_name)
     }
 }
 
@@ -225,6 +245,36 @@ impl TypeChecker {
                 Statement::StructDecl(s) => {
                     self.symbols.add_struct(s.name.clone(), s.fields.clone());
                 }
+
+                Statement::ImplDecl(impl_def) => {
+                    if impl_def.trait_name.is_empty() {
+                        if let Type::Custom(struct_name) = &impl_def.type_name {
+                            for method in &impl_def.methods {
+                                if let Statement::Function {
+                                    name,
+                                    params,
+                                    return_type,
+                                    ..
+                                } = method
+                                {
+                                    let sig = FunctionSignature {
+                                        param_types: params
+                                            .iter()
+                                            .map(|(_, t)| t.clone())
+                                            .collect(),
+                                        return_type: return_type.clone(),
+                                    };
+                                    self.symbols.add_struct_method(
+                                        struct_name.clone(),
+                                        name.clone(),
+                                        sig,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+
                 _ => {}
             }
         }
