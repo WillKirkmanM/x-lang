@@ -4,7 +4,11 @@ use x_ast::Expr;
 use crate::CodeGen;
 
 impl<'ctx> CodeGen<'ctx> {
-    pub(crate) fn gen_become(&mut self, expr: &Expr) -> Result<(), String> {
+    pub(crate) fn gen_become(
+        &mut self,
+        expr: &Expr,
+        self_type: Option<&x_ast::Type>,
+    ) -> Result<(), String> {
         let current_function: FunctionValue<'ctx> = self.current_function.ok_or_else(|| {
             "Internal Error: 'become' used outside of a function context.".to_string()
         })?;
@@ -28,7 +32,7 @@ impl<'ctx> CodeGen<'ctx> {
         let new_arg_values: Vec<BasicMetadataValueEnum<'ctx>> = call_args
             .iter()
             .map(|arg_expr| {
-                self.gen_expr(arg_expr)
+                self.gen_expr(arg_expr, self_type)
                     .map(|v| BasicMetadataValueEnum::from(v))
             })
             .collect::<Result<Vec<BasicMetadataValueEnum<'ctx>>, String>>()?;
