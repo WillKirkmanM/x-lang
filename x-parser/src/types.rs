@@ -73,12 +73,20 @@ pub fn parse_type(pair: Pair<Rule>) -> Type {
         // fallback: treat a bare identifier token as a custom type name
         Rule::value_identifier => Type::Custom(pair.as_str().to_string()),
 
-        // Case 5: A reference type, like `&T` or `&mut T[]`.
+        // Case 5: A reference type, like `&T`, `&mut T[]` and &unique mut T.
         Rule::ref_type => {
             let mut inner = pair.into_inner();
+
+            // Check for the 'unique' keyword first.
+            let is_unique = inner.peek().map(|p| p.as_rule()) == Some(Rule::unique_kw);
+            if is_unique {
+                inner.next(); // Consume 'unique' if it exists.
+            }
+
+            // Then, check for the 'mut' keyword.
             let is_mut = inner.peek().map(|p| p.as_rule()) == Some(Rule::kw_mut);
             if is_mut {
-                inner.next();
+                inner.next(); // Consume 'mut' if it exists.
             }
 
             if inner.peek().map(|p| p.as_rule()) == Some(Rule::lifetime) {
@@ -95,8 +103,10 @@ pub fn parse_type(pair: Pair<Rule>) -> Type {
                 inner_ty = Type::Array(Box::new(inner_ty));
             }
 
+            // Construct the `Type::Ref` with the new `is_unique` field.
             Type::Ref {
                 is_mut,
+                is_unique,
                 inner: Box::new(inner_ty),
             }
         }
