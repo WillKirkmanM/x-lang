@@ -7,6 +7,9 @@ ASCII_UPPER = _{ 'A'..'Z' }
 
 ID_CONT = _{ ASCII_ALPHANUMERIC | "_" }
 
+attribute_content = { (!"]" ~ ANY)* }
+attribute         = { "#[" ~ attribute_content ~ "]" }
+
 kw_mut    = { "mut" }
 keyword = _{
     "fn" ~ !ID_CONT
@@ -57,7 +60,8 @@ generic_arg = { lifetime | identifier }
 
 custom_type  = { type_identifier ~ ("<" ~ generic_arg ~ ("," ~ generic_arg)* ~ ">")? }
 
-ref_type     = { "&" ~ kw_mut? ~ lifetime? ~ (basic_type | custom_type) ~ array_postfix* }
+unique_kw = { "unique" }
+ref_type     = { "&" ~ unique_kw? ~ kw_mut? ~ lifetime? ~ (array_type | basic_type | custom_type) ~ array_postfix* }
 array_postfix = { "[]" }
 
 array_type = { "[" ~ type ~ "]" }
@@ -75,7 +79,7 @@ statement = {
     extern_fn_decl |
     struct_decl |
     trait_decl |
-    impl_decl |
+    impl_def |
     if_stmt |
     for_range_loop |
     for_each_loop |
@@ -84,6 +88,7 @@ statement = {
     return_stmt |
     become_stmt |
     (var_decl | assignment_stmt | import | expr) ~ ";"
+
 }
 
 extern_fn_decl = { "extern" ~ "fn" ~ identifier ~ "(" ~ extern_params? ~ ")" ~ ( "->" ~ type_specifier )? ~ ";" }
@@ -175,7 +180,8 @@ args          = { expr ~ ("," ~ expr)* }
 array_literal = { "[" ~ (expr ~ ("," ~ expr)*)? ~ "]" }
 
 struct_field       = { identifier ~ ":" ~ type_specifier }
-struct_decl        = { "struct" ~ identifier ~ generic_param_def_list? ~ "{" ~ struct_fields? ~ ","? ~ "}" }
+invariant_block    = { "invariant" ~ block }
+struct_decl        = { attribute* ~ "struct" ~ identifier ~ generic_param_def_list? ~ "{" ~ struct_fields? ~ ","? ~ invariant_block? ~ "}" }
 struct_fields      = { struct_field ~ ("," ~ struct_field)* }
 struct_instantiate = { identifier ~ "{" ~ struct_init_fields? ~ "}" }
 struct_init_fields = { struct_init_field ~ ("," ~ struct_init_field)* }
@@ -212,8 +218,12 @@ trait_item = { function_def }
 impl_item = { function_def }
 
 trait_decl = { "trait" ~ identifier ~ "{" ~ trait_item* ~ "}" }
-impl_decl = { "impl" ~ identifier ~ "for" ~ type_specifier ~ "{" ~ impl_item* ~ "}" }
+
+trait_impl_decl = { "impl" ~ identifier ~ "for" ~ type_specifier ~ "{" ~ impl_item* ~ "}" }
+inherent_impl_decl = { "impl" ~ type_specifier ~ "{" ~ impl_item* ~ "}" }
+
+
 
 trait_def = { "trait" ~ identifier ~ "{" ~ trait_item* ~ "}" }
 
-impl_def = { "impl" ~ identifier ~ "for" ~ identifier ~ "{" ~ impl_item* ~ "}" }
+impl_def = { trait_impl_decl | inherent_impl_decl }
