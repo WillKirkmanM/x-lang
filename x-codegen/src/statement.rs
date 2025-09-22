@@ -10,9 +10,10 @@ impl<'ctx> CodeGen<'ctx> {
     pub(crate) fn gen_statement(
         &mut self,
         stmt: &Statement,
+        self_type: Option<&Type>,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         match stmt {
-            Statement::Expression { expr } => self.gen_expr(expr).map(Some),
+            Statement::Expression { expr } => self.gen_expr(expr, self_type).map(Some),
             Statement::VariableDecl {
                 name,
                 type_ann,
@@ -40,7 +41,7 @@ impl<'ctx> CodeGen<'ctx> {
                         || matches!(type_ann.as_ref(), Some(x) if *x == x_ast::Type::Unknown)
                     {
                         // Generate the RHS value first to discover its LLVM type.
-                        let rhs_val = self.gen_expr(value)?;
+                        let rhs_val = self.gen_expr(value, self_type)?;
                         let rhs_llvm_type = rhs_val.get_type();
 
                         // Allocate a slot of the exact LLVM type the RHS produced.
@@ -70,7 +71,7 @@ impl<'ctx> CodeGen<'ctx> {
 
                         let alloca = self.builder.build_alloca(var_llvm_type, name).unwrap();
 
-                        let value_val = self.gen_expr(value)?;
+                        let value_val = self.gen_expr(value, self_type)?;
                         let coerced =
                             self.coerce_value_to_type(value_val, var_llvm_type, "assign_coerce")?;
                         self.builder.build_store(alloca, coerced).unwrap();
@@ -95,7 +96,7 @@ impl<'ctx> CodeGen<'ctx> {
             Statement::Block { statements } => {
                 let mut last_value = None;
                 for statement in statements {
-                    last_value = self.gen_statement(statement)?;
+                    last_value = self.gen_statement(statement, self_type)?;
                 }
                 Ok(last_value)
             }
@@ -106,7 +107,7 @@ impl<'ctx> CodeGen<'ctx> {
                 end,
                 body,
             } => {
-                self.gen_for_range_loop(var, start, end, body)?;
+                self.gen_for_range_loop(var, start, end, body, self_type)?;
                 Ok(None)
             }
             Statement::ForEachLoop {
@@ -114,7 +115,7 @@ impl<'ctx> CodeGen<'ctx> {
                 iterator,
                 body,
             } => {
-                self.gen_for_each_loop(var, iterator, body)?;
+                self.gen_for_each_loop(var, iterator, body, self_type)?;
                 Ok(None)
             }
             Statement::If {
@@ -122,10 +123,11 @@ impl<'ctx> CodeGen<'ctx> {
                 then_block,
                 else_block,
             } => self
-                .gen_if(condition, then_block, else_block)
+                .gen_if(condition, then_block, else_block, self_type)
+
                 .map(|opt_float_value| opt_float_value.map(|float_value| float_value.into())),
             Statement::WhileLoop { condition, body } => {
-                self.gen_while_loop(condition, body)?;
+                self.gen_while_loop(condition, body, self_type)?;
                 Ok(None)
             }
             Statement::StructDecl(struct_def) => {
@@ -144,7 +146,7 @@ impl<'ctx> CodeGen<'ctx> {
 
                 match value {
                     Some(expr) => {
-                        let expr_val = self.gen_expr(expr)?;
+                        let expr_val = self.gen_expr(expr, self_type)?;
                         if let Some(ret_type) = return_type {
                             if ret_type == expr_val.get_type() {
                                 return_val_basic = Some(expr_val);
@@ -227,7 +229,7 @@ impl<'ctx> CodeGen<'ctx> {
                 Ok(None)
             }
             Statement::Become { call } => {
-                self.gen_become(call)?;
+                self.gen_become(call, self_type)?;
                 Ok(None)
             }
             Statement::ImplDecl(impl_def) => {
@@ -259,6 +261,42 @@ impl<'ctx> CodeGen<'ctx> {
             Expr::String(_) => Ok(x_ast::Type::String),
             Expr::Array(_) => Ok(x_ast::Type::Array(Box::new(x_ast::Type::Unknown))),
             Expr::TypeLiteral(t) => Ok(t.clone()),
+            Expr::ArrayAccess { array, .. } => {
+                let array_type = self.infer_ast_type_from_expr(array)?;
+                match array_type {
+                    // Case 1: Direct array type, e.g., `let a: i32[] = ...; a[0]`
+                    x_ast::Type::Array(inner) => Ok(*inner),
+                    // Case 2: Reference to an array, e.g., `fn f(p: &mut i32[]) { p[0] }`
+                    x_ast::Type::Ref { inner, .. } => {
+                        if let x_ast::Type::Array(inner_inner) = *inner {
+                            Ok(*inner_inner)
+                        } else {
+                            Err(format!(
+                                "Array access on a reference to a non-array type: {:?}",
+                                inner
+                            ))
+                        }
+                    }
+                    _ => Err(format!("Array access on non-array type: {:?}", array_type)),
+                }
+            }
+            Expr::FieldAccess { object, field: _field } => {
+                let object_type = self.infer_ast_type_from_expr(object)?;
+                let base_type = match &object_type {
+                    x_ast::Type::Ref { inner, .. } => &**inner,
+                    _ => &object_type,
+                };
+
+                if let x_ast::Type::Custom(_struct_name) = base_type {
+                    return Ok(x_ast::Type::Unknown);
+                }
+
+                Err(format!(
+                    "Could not infer type for field access on {:?}",
+                    object_type
+                ))
+            }
+
             Expr::Identifier(name) => self
                 .variable_types
                 .get(name)
