@@ -57,6 +57,8 @@ impl TypeChecker {
             name: mangled_name.clone(),
             generic_params: None,
             fields: specialised_fields.clone(),
+            invariant: None,
+            layout: generic_struct.layout,
         };
 
         println!("[TypeChecker] Monomorphised new struct: {}", mangled_name);
