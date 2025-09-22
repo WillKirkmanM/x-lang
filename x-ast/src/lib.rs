@@ -174,11 +174,20 @@ pub struct ExternParam {
     pub type_name: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Default)]
+pub enum Layout {
+   #[default]
+   AoS, // Array of Structs
+   SoA, // Struct of Arrays
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct StructDef {
     pub name: String,
     pub generic_params: Option<Vec<String>>,
     pub fields: Vec<(String, Type)>,
+    pub invariant: Option<Box<Expr>>,
+    pub layout: Layout,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -215,7 +224,7 @@ pub enum Type {
     Array(Box<Type>),
     TypeParameter(String),
     GenericInstance { name: String, type_args: Vec<Type> },
-    Ref { is_mut: bool, inner: Box<Type> },
+    Ref { is_mut: bool, is_unique: bool, inner: Box<Type> },
 }
 
 impl std::fmt::Display for Type {
@@ -238,8 +247,12 @@ impl std::fmt::Display for Type {
                     .join(", ");
                 write!(f, "{}<{}>", name, args)
             }
-            Type::Ref { is_mut, inner } => {
-                write!(f, "&{}{}", if *is_mut { "mut " } else { "" }, inner)
+            Type::Ref { is_mut, is_unique, inner } => {
+                write!(f, "&{}{}{}", 
+                    if *is_unique { "unique " } else { "" },
+                    if *is_mut { "mut " } else { "" }, 
+                    inner
+                )
             }
         }
     }
