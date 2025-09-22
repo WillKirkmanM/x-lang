@@ -1,19 +1,50 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{CodeGen, INSTANTIATION_CACHE};
-use inkwell::attributes::AttributeLoc;
+use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
 use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue};
 use inkwell::AddressSpace;
 use x_ast::{Expr, ExternParam, Statement, StringLiteral, StringPart, StructDef, Type};
 
 use x_logging::{debug, error, info, trace, warn};
+use x_typechecker::FunctionSignature;
 
 impl<'ctx> CodeGen<'ctx> {
     pub fn get_unique_id(&mut self) -> usize {
         use std::sync::atomic::{AtomicUsize, Ordering};
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         COUNTER.fetch_add(1, Ordering::Relaxed)
+    }
+
+    fn apply_function_parameter_attributes(
+        &self,
+        func_value: FunctionValue<'ctx>,
+        ast_params: &[(String, x_ast::Type)],
+    ) {
+        let noalias_kind_id = Attribute::get_named_enum_kind_id("noalias");
+        if noalias_kind_id == 0 {
+            warn!("Could not find LLVM attribute kind for 'noalias'");
+            return;
+        }
+        let noalias_attribute = self.context.create_enum_attribute(noalias_kind_id, 0);
+
+        for (i, (_name, ast_type)) in ast_params.iter().enumerate() {
+            // Check for the `is_unique` flag on reference types.
+            if let x_ast::Type::Ref {
+                is_unique: true, ..
+            } = ast_type
+            {
+                // If the AST parameter is a `&unique` reference, add the `noalias`
+                // attribute to the corresponding LLVM function parameter.
+                func_value.add_attribute(AttributeLoc::Param(i as u32), noalias_attribute);
+                trace!(
+                    "Applied 'noalias' attribute to param {} of function {:?}",
+                    i,
+                    func_value.get_name()
+                );
+            }
+        }
     }
 
     fn add_fn_attr(&self, func: FunctionValue<'ctx>, attr_name: &str) {
@@ -55,7 +86,7 @@ impl<'ctx> CodeGen<'ctx> {
 
         let mut last_val = self.context.f64_type().const_float(0.0);
         for stmt in body {
-            if let Some(val) = self.gen_statement(stmt)? {
+            if let Some(val) = self.gen_statement(stmt, None)? {
                 last_val = val.into_float_value();
             }
         }
@@ -76,14 +107,15 @@ impl<'ctx> CodeGen<'ctx> {
         &mut self,
         name: &str,
         args: &[Expr],
+        self_type: Option<&x_ast::Type>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         if name == "print" && args.len() == 1 {
-            return self.gen_poly_print(&args[0]);
+            return self.gen_poly_print(&args[0], self_type);
         }
 
         let mut arg_vals: Vec<BasicValueEnum<'ctx>> = Vec::with_capacity(args.len());
         for a in args {
-            arg_vals.push(self.gen_expr(a)?);
+            arg_vals.push(self.gen_expr(a, self_type)?);
         }
 
         let function_opt: Option<FunctionValue<'ctx>> = if let Some(f) = self.functions.get(name) {
@@ -403,7 +435,11 @@ impl<'ctx> CodeGen<'ctx> {
     }
 
     /// Generates a call to the correct underlying print function (`print_str` or `print`) based on the argument's type.
-    fn gen_poly_print(&mut self, arg_expr: &Expr) -> Result<BasicValueEnum<'ctx>, String> {
+    fn gen_poly_print(
+        &mut self,
+        arg_expr: &Expr,
+        self_type: Option<&x_ast::Type>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
         if let Expr::String(literal) = arg_expr {
             if literal.parts.len() > 1
                 || literal
@@ -411,11 +447,11 @@ impl<'ctx> CodeGen<'ctx> {
                     .iter()
                     .any(|p| matches!(p, StringPart::Interpolation(_)))
             {
-                return self.gen_interpolated_string_print(literal);
+                return self.gen_interpolated_string_print(literal, self_type);
             }
         }
 
-        let arg_val = self.gen_expr(arg_expr)?;
+        let arg_val = self.gen_expr(arg_expr, self_type)?;
 
         let (fn_name, arg_to_print): (&str, BasicMetadataValueEnum) = match arg_val {
             BasicValueEnum::PointerValue(pv) => ("print_str", pv.into()),
@@ -446,6 +482,7 @@ impl<'ctx> CodeGen<'ctx> {
     fn gen_interpolated_string_print(
         &mut self,
         literal: &StringLiteral,
+        self_type: Option<&x_ast::Type>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let printf = self.module.get_function("printf").unwrap();
         let mut format_string = String::new();
@@ -455,7 +492,7 @@ impl<'ctx> CodeGen<'ctx> {
             match part {
                 StringPart::Text(text) => format_string.push_str(&text.replace("%", "%%")),
                 StringPart::Interpolation(expr) => {
-                    let val = self.gen_expr(expr)?;
+                    let val = self.gen_expr(expr, self_type)?;
                     match val {
                         BasicValueEnum::IntValue(_) => format_string.push_str("%d"),
                         BasicValueEnum::FloatValue(_) => format_string.push_str("%.0f"),
@@ -478,50 +515,6 @@ impl<'ctx> CodeGen<'ctx> {
             .build_call(printf, &printf_args, "printf_interp")
             .unwrap();
         Ok(self.context.f64_type().const_float(0.0).into())
-    }
-
-    fn build_coercion(
-        &self,
-        value: BasicValueEnum<'ctx>,
-        expected_type: inkwell::types::BasicMetadataTypeEnum<'ctx>,
-        name: &str,
-    ) -> Result<BasicValueEnum<'ctx>, String> {
-        let expected_basic = match expected_type {
-            BasicMetadataTypeEnum::FloatType(t) => t.as_basic_type_enum(),
-            BasicMetadataTypeEnum::IntType(t) => t.as_basic_type_enum(),
-            BasicMetadataTypeEnum::PointerType(t) => t.as_basic_type_enum(),
-            BasicMetadataTypeEnum::ArrayType(t) => t.as_basic_type_enum(),
-            BasicMetadataTypeEnum::StructType(t) => t.as_basic_type_enum(),
-            BasicMetadataTypeEnum::VectorType(t) => t.as_basic_type_enum(),
-            _ => {
-                return Err(format!(
-                    "Unsupported expected parameter type for coercion: {:?}",
-                    expected_type
-                ));
-            }
-        };
-
-        if value.get_type() == expected_basic {
-            return Ok(value);
-        }
-
-        match (expected_basic, value) {
-            (BasicTypeEnum::FloatType(et), BasicValueEnum::IntValue(av)) => Ok(self
-                .builder
-                .build_signed_int_to_float(av, et, name)
-                .unwrap()
-                .into()),
-            (BasicTypeEnum::IntType(et), BasicValueEnum::FloatValue(av)) => Ok(self
-                .builder
-                .build_float_to_signed_int(av, et, name)
-                .unwrap()
-                .into()),
-            _ => Err(format!(
-                "Cannot coerce value of type {:?} to {:?}",
-                value.get_type(),
-                expected_basic
-            )),
-        }
     }
 
     pub fn compile_function(
@@ -590,7 +583,7 @@ impl<'ctx> CodeGen<'ctx> {
                 warn!(function = %name, "Unreachable code detected in function");
                 break;
             }
-            last_val = self.gen_statement(stmt)?;
+            last_val = self.gen_statement(stmt, None)?;
         }
 
         if self
@@ -634,9 +627,9 @@ impl<'ctx> CodeGen<'ctx> {
                         BasicTypeEnum::VectorType(vt) => vt.const_zero().into(),
                         _ => {
                             return Err(format!(
-                                "Function '{}' must return a value but none was produced (unsupported default for type {:?})",
-                                name, exp_bt
-                            ));
+                                    "Function '{}' must return a value but none was produced (unsupported default for type {:?})",
+                                    name, exp_bt
+                                ));
                         }
                     };
                     self.builder.build_return(Some(&default_val)).unwrap();
@@ -681,6 +674,50 @@ impl<'ctx> CodeGen<'ctx> {
                 false
             }
             _ => false,
+        }
+    }
+
+    fn build_coercion(
+        &self,
+        value: BasicValueEnum<'ctx>,
+        expected_type: inkwell::types::BasicMetadataTypeEnum<'ctx>,
+        name: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let expected_basic = match expected_type {
+            BasicMetadataTypeEnum::FloatType(t) => t.as_basic_type_enum(),
+            BasicMetadataTypeEnum::IntType(t) => t.as_basic_type_enum(),
+            BasicMetadataTypeEnum::PointerType(t) => t.as_basic_type_enum(),
+            BasicMetadataTypeEnum::ArrayType(t) => t.as_basic_type_enum(),
+            BasicMetadataTypeEnum::StructType(t) => t.as_basic_type_enum(),
+            BasicMetadataTypeEnum::VectorType(t) => t.as_basic_type_enum(),
+            _ => {
+                return Err(format!(
+                    "Unsupported expected parameter type for coercion: {:?}",
+                    expected_type
+                ));
+            }
+        };
+
+        if value.get_type() == expected_basic {
+            return Ok(value);
+        }
+
+        match (expected_basic, value) {
+            (BasicTypeEnum::FloatType(et), BasicValueEnum::IntValue(av)) => Ok(self
+                .builder
+                .build_signed_int_to_float(av, et, name)
+                .unwrap()
+                .into()),
+            (BasicTypeEnum::IntType(et), BasicValueEnum::FloatValue(av)) => Ok(self
+                .builder
+                .build_float_to_signed_int(av, et, name)
+                .unwrap()
+                .into()),
+            _ => Err(format!(
+                "Cannot coerce value of type {:?} to {:?}",
+                value.get_type(),
+                expected_basic
+            )),
         }
     }
 
@@ -753,6 +790,8 @@ impl<'ctx> CodeGen<'ctx> {
                             };
                             let func = self.module.add_function(&mangled, fn_type, None);
                             self.functions.insert(mangled.clone(), func);
+                            self.apply_function_parameter_attributes(func, params);
+
                             if *is_pure {
                                 self.add_fn_attr(func, "readnone");
                             }
@@ -784,6 +823,7 @@ impl<'ctx> CodeGen<'ctx> {
                             };
                             let resolver = self.module.add_function(name, fn_type, None);
                             self.functions.insert(name.clone(), resolver);
+                            self.apply_function_parameter_attributes(resolver, params);
                             if *is_pure {
                                 self.add_fn_attr(resolver, "readnone");
                             }
@@ -827,6 +867,8 @@ impl<'ctx> CodeGen<'ctx> {
                     info!(name = %name, fn_type = ?fn_type, "adding function to module");
                     let func = self.module.add_function(name, fn_type, None);
                     self.functions.insert(name.clone(), func);
+                    self.apply_function_parameter_attributes(func, params);
+
                     if *is_pure {
                         self.add_fn_attr(func, "readnone");
                     }
@@ -1033,12 +1075,22 @@ impl<'ctx> CodeGen<'ctx> {
         for stmt in &ast.statements {
             if let x_ast::Statement::ImplDecl(impl_def) = stmt {
                 if let x_ast::Type::Custom(struct_name) = &impl_def.type_name {
-                    let method_names_set =
+                    let method_names_map =
                         self.struct_methods.entry(struct_name.clone()).or_default();
                     let mut implemented_method_names = std::collections::HashSet::new();
-                    for method in &impl_def.methods {
-                        if let x_ast::Statement::Function { name, .. } = method {
-                            method_names_set.insert(name.clone());
+                    for method_stmt in &impl_def.methods {
+                        if let x_ast::Statement::Function {
+                            name,
+                            params,
+                            return_type,
+                            ..
+                        } = method_stmt
+                        {
+                            let sig = FunctionSignature {
+                                param_types: params.iter().map(|(_, t)| t.clone()).collect(),
+                                return_type: return_type.clone(),
+                            };
+                            method_names_map.insert(name.clone(), sig);
                             implemented_method_names.insert(name.clone());
                         }
                     }
@@ -1048,7 +1100,21 @@ impl<'ctx> CodeGen<'ctx> {
                             if !implemented_method_names.contains(method_name)
                                 && default_body_opt.is_some()
                             {
-                                method_names_set.insert(method_name.clone());
+                                if let Some(Statement::Function {
+                                    params,
+                                    return_type,
+                                    ..
+                                }) = default_body_opt
+                                {
+                                    let sig = FunctionSignature {
+                                        param_types: params
+                                            .iter()
+                                            .map(|(_, t)| t.clone())
+                                            .collect(),
+                                        return_type: return_type.clone(),
+                                    };
+                                    method_names_map.insert(method_name.clone(), sig);
+                                }
                             }
                         }
                     }
@@ -1216,11 +1282,7 @@ impl<'ctx> CodeGen<'ctx> {
         let param_types: Vec<BasicTypeEnum<'ctx>> = params
             .iter()
             .map(|(_, ast_type)| {
-                if let x_ast::Type::Ref {
-                    is_mut: _is_mut,
-                    inner,
-                } = ast_type
-                {
+                if let x_ast::Type::Ref { inner, .. } = ast_type {
                     if let x_ast::Type::TypeParameter(p_name) = &**inner {
                         if p_name == "Self" && self_type.is_some() {
                             return self.context.ptr_type(AddressSpace::default()).into();
@@ -1241,7 +1303,9 @@ impl<'ctx> CodeGen<'ctx> {
                 .fn_type(&param_metadata, false)
         };
 
-        self.module.add_function(name, fn_type, None);
+        let func = self.module.add_function(name, fn_type, None);
+        self.apply_function_parameter_attributes(func, params);
+
         Ok(())
     }
 
@@ -1280,12 +1344,18 @@ impl<'ctx> CodeGen<'ctx> {
 
             for (i, (param_name, param_ast_type)) in params.iter().enumerate() {
                 let mut final_ast_type = param_ast_type.clone();
-                if let x_ast::Type::Ref { is_mut, inner } = param_ast_type {
+                if let x_ast::Type::Ref {
+                    is_mut,
+                    is_unique,
+                    inner,
+                } = param_ast_type
+                {
                     if let x_ast::Type::TypeParameter(p_name) = &**inner {
                         if p_name == "Self" {
                             if let Some(st) = self_type {
                                 final_ast_type = x_ast::Type::Ref {
                                     is_mut: *is_mut,
+                                    is_unique: *is_unique,
                                     inner: Box::new(st.clone()),
                                 };
                             }
@@ -1309,7 +1379,8 @@ impl<'ctx> CodeGen<'ctx> {
 
             let mut last_val: Option<BasicValueEnum<'ctx>> = None;
             for stmt in body_stmts.iter() {
-                last_val = self.gen_statement(stmt)?;
+                last_val = self.gen_statement(stmt, self_type)?;
+
                 if self
                     .builder
                     .get_insert_block()
