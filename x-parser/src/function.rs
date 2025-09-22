@@ -56,6 +56,7 @@ pub fn parse_function_def(pair: Pair<Rule>) -> Statement {
                     let is_mut = s.peek().map_or(false, |x| x.as_rule() == Rule::kw_mut);
                     let ty = Type::Ref {
                         is_mut,
+                        is_unique: false,
                         inner: Box::new(Type::TypeParameter("Self".to_string())),
                     };
                     params.push(("self".to_string(), ty));

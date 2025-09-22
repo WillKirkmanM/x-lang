@@ -10,7 +10,7 @@ use inkwell::{
     values::{FunctionValue, PointerValue},
     OptimizationLevel,
 };
-use x_ast::{Program, Statement, TraitDef, Type};
+use x_ast::{Program, Statement, StructDef, TraitDef, Type};
 use x_std::StdLib;
 
 use x_logging::{debug, error, info, trace};
@@ -25,6 +25,7 @@ pub mod statement;
 pub mod r#struct;
 pub mod r#while;
 pub use extern_fn::*;
+use x_typechecker::FunctionSignature;
 pub mod array;
 pub mod assignment;
 pub mod r#become;
@@ -41,29 +42,44 @@ thread_local! {
 }
 
 pub struct CodeGen<'ctx> {
+    // Core LLVM components
     context: &'ctx Context,
     module: Module<'ctx>,
     builder: Builder<'ctx>,
     execution_engine: ExecutionEngine<'ctx>,
-    variables: HashMap<String, PointerValue<'ctx>>,
+
+    // Standard library interface
     stdlib: StdLib<'ctx>,
+
+    // Functions
     pub functions: HashMap<String, FunctionValue<'ctx>>,
     pub external_functions: HashMap<String, FunctionValue<'ctx>>,
-    original_to_generated: HashMap<String, String>,
-    generated_to_original: HashMap<String, String>,
     imported_functions: HashMap<String, FunctionValue<'ctx>>,
-    struct_types: HashMap<String, (StructType<'ctx>, Vec<String>)>,
-    traits: HashMap<String, TraitDef>,
-    struct_methods: HashMap<String, HashSet<String>>,
-    variable_types: HashMap<String, x_ast::Type>,
     current_function: Option<FunctionValue<'ctx>>,
+    fn_param_names: HashMap<String, Vec<String>>,
+    throws_functions: HashSet<String>,
+
+    // Variables
+    variables: HashMap<String, PointerValue<'ctx>>,
+    variable_types: HashMap<String, x_ast::Type>,
+
+    // Structs and traits
+    struct_types: HashMap<String, (StructType<'ctx>, Vec<String>, x_ast::Layout)>,
+    ast_structs: HashMap<String, StructDef>,
+    traits: HashMap<String, TraitDef>,
+    struct_methods: HashMap<String, HashMap<String, FunctionSignature>>,
+
+    // Specialisation, memoisation, generics
     memoisation_caches: HashMap<String, (GlobalValue<'ctx>, BasicTypeEnum<'ctx>)>,
     monomorph_scope: HashMap<String, x_ast::Type>,
-    fn_param_names: HashMap<String, Vec<String>>,
     multi_variants: HashMap<String, Vec<(Vec<Type>, String)>>,
     multi_resolvers: HashSet<String>,
-    throws_functions: HashSet<String>,
+
+    // Name mapping between original and generated symbols
+    original_to_generated: HashMap<String, String>,
+    generated_to_original: HashMap<String, String>,
 }
+
 
 impl<'ctx> CodeGen<'ctx> {
     pub fn new(context: &'ctx Context, module_name: &str) -> Self {
@@ -98,7 +114,8 @@ impl<'ctx> CodeGen<'ctx> {
             variable_types: HashMap::new(),
             current_function: None,
             memoisation_caches: HashMap::new(),
-            monomorph_scope: HashMap::new(), // Initialize the new field
+            monomorph_scope: HashMap::new(),
+            ast_structs: HashMap::new(),
             fn_param_names: HashMap::new(),
             multi_variants: HashMap::new(),
             multi_resolvers: HashSet::new(),
@@ -404,7 +421,7 @@ impl<'ctx> CodeGen<'ctx> {
                         | Statement::ExternFunctionDecl { .. }
                 ) {
                     trace!("generating top-level stmt in wrapper: stmt={:?}", stmt);
-                    self.gen_statement(stmt)?;
+                    self.gen_statement(stmt, None)?;
                 }
             }
 
@@ -557,4 +574,4 @@ impl<'ctx> CodeGen<'ctx> {
         debug!("get_ir: len={}", ir.len());
         ir
     }
-}
+   }

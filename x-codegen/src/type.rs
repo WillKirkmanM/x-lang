@@ -4,7 +4,7 @@ use inkwell::{
     types::{BasicType, BasicTypeEnum},
     AddressSpace,
 };
-use x_ast::{Expr, Statement, StructDef, Type};
+use x_ast::{Expr, Layout, Statement, StructDef, Type};
 
 use x_logging::warn;
 
@@ -28,7 +28,7 @@ impl<'ctx> CodeGen<'ctx> {
             }
             struct_ptr_name if struct_ptr_name.ends_with("_ptr") => {
                 let base_name = &struct_ptr_name[..struct_ptr_name.len() - 4];
-                if let Some((_struct_type, _)) = self.struct_types.get(base_name) {
+                if self.struct_types.contains_key(base_name) {
                     Ok(self.context.ptr_type(AddressSpace::default()).into())
                 } else {
                     Err(format!(
@@ -66,13 +66,14 @@ impl<'ctx> CodeGen<'ctx> {
                 // If the named struct hasn't been registered yet (e.g. a generic template
                 // like `Pair` that wasn't monomorphised), create and register an opaque
                 // LLVM struct with that name so the codegen can continue rather than panic.
-                if let Some((st, _)) = self.struct_types.get(name) {
+                if let Some((st, ..)) = self.struct_types.get(name) {
                     st.as_basic_type_enum()
                 } else {
                     // Create an opaque struct with the requested name and register it.
                     let opaque = self.context.opaque_struct_type(name.as_str());
-                    // Insert with empty metadata/fields; later passes may replace/populate if needed.
-                    self.struct_types.insert(name.clone(), (opaque, Vec::new()));
+                    // Insert with empty metadata/fields and a default layout; later passes may replace/populate if needed.
+                    self.struct_types
+                        .insert(name.clone(), (opaque, Vec::new(), Layout::default()));
                     opaque.as_basic_type_enum()
                 }
             }
@@ -97,7 +98,7 @@ impl<'ctx> CodeGen<'ctx> {
                 }
 
                 // If a concrete struct with this exact name has already been declared/instantiated, use it.
-                if let Some((st, _)) = self.struct_types.get(name) {
+                if let Some((st, _, _)) = self.struct_types.get(name) {
                     return st.as_basic_type_enum();
                 }
 
@@ -120,7 +121,8 @@ impl<'ctx> CodeGen<'ctx> {
 
                 // As a last resort, create and register an opaque struct
                 let opaque = self.context.opaque_struct_type(name.as_str());
-                self.struct_types.insert(name.clone(), (opaque, Vec::new()));
+                self.struct_types
+                    .insert(name.clone(), (opaque, Vec::new(), Layout::default()));
                 self.struct_types.get(name).unwrap().0.as_basic_type_enum()
             }
         }

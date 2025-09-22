@@ -1,5 +1,5 @@
 use inkwell::{values::BasicValueEnum, FloatPredicate};
-use x_ast::{Expr, UnaryOperator};
+use x_ast::{Expr, Type, UnaryOperator};
 
 use crate::CodeGen;
 
@@ -8,10 +8,11 @@ impl<'ctx> CodeGen<'ctx> {
         &mut self,
         op: UnaryOperator,
         expr: &Expr,
+        self_type: Option<&Type>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         match op {
             UnaryOperator::Negate => {
-                let val = self.gen_expr(expr)?;
+                let val = self.gen_expr(expr, self_type)?;
 
                 let result = match val {
                     BasicValueEnum::IntValue(int_val) => self
@@ -35,7 +36,7 @@ impl<'ctx> CodeGen<'ctx> {
                 Ok(result)
             }
             UnaryOperator::LogicalNot => {
-                let val = self.gen_expr(expr)?.into_float_value();
+                let val = self.gen_expr(expr, self_type)?.into_float_value();
                 let is_zero = self
                     .builder
                     .build_float_compare(
@@ -52,7 +53,7 @@ impl<'ctx> CodeGen<'ctx> {
                     .into())
             }
             UnaryOperator::BitwiseNot => {
-                let val = self.gen_expr(expr)?.into_float_value();
+                let val = self.gen_expr(expr, self_type)?.into_float_value();
                 let int_val = self
                     .builder
                     .build_float_to_signed_int(val, self.context.i64_type(), "float_to_int")

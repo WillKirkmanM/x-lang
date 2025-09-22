@@ -3,7 +3,7 @@ use inkwell::{
     values::{BasicValue, BasicValueEnum},
     AddressSpace,
 };
-use x_ast::Expr;
+use x_ast::{Expr, Type};
 
 use crate::CodeGen;
 
@@ -11,6 +11,7 @@ impl<'ctx> CodeGen<'ctx> {
     pub fn handle_array_literal(
         &mut self,
         elements: &Vec<Expr>,
+        self_type: Option<&Type>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         if elements.is_empty() {
             // Handle empty array case
@@ -22,7 +23,7 @@ impl<'ctx> CodeGen<'ctx> {
         // Generate the values for the elements
         let mut element_values = Vec::new();
         for elem_expr in elements {
-            element_values.push(self.gen_expr(elem_expr)?);
+            element_values.push(self.gen_expr(elem_expr, self_type)?);
         }
 
         let first_element_type = element_values[0].get_type();

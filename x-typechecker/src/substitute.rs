@@ -110,7 +110,22 @@ impl TypeChecker {
             | Expr::String(_)
             | Expr::Boolean(_)
             | Expr::Identifier(_) => {}
-            _ => {}
+            Expr::AddressOf { expr, .. } => {
+                self.substitute_types_in_expr(expr, type_map);
+            }
+            Expr::Deref { expr } => {
+                self.substitute_types_in_expr(expr, type_map);
+            }
+            Expr::Assignment { target, value } => {
+                self.substitute_types_in_expr(target, type_map);
+                self.substitute_types_in_expr(value, type_map);
+            }
+            Expr::AnonymousFunction { body, .. } => {
+                for stmt in body {
+                    self.substitute_types_in_statement(stmt, type_map);
+                }
+            }
+            Expr::TypeLiteral(_) => {}
         }
     }
 

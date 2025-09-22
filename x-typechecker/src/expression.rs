@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use x_ast::{Expr, Operator, Statement, Type};
+use x_ast::{Expr, Operator, Statement, Type, UnaryOperator};
 
 use crate::{FunctionSignature, TypeChecker};
 
@@ -225,10 +225,12 @@ impl TypeChecker {
                             Type::Ref {
                                 is_mut: exp_mut,
                                 inner: exp_inner,
+                                is_unique: _,
                             },
                             Type::Ref {
                                 is_mut: act_mut,
                                 inner: act_inner,
+                                is_unique: _,
                             },
                         ) => {
                             // If callee expects a mutable reference, caller must provide a mutable one.
@@ -310,6 +312,11 @@ impl TypeChecker {
                     }
                 }
 
+                // 2b. If not a field or trait method, check for an inherent method.
+                if let Some(_method_sig) = self.symbols.get_struct_method(&struct_name, field) {
+                    return Ok(Type::Unknown);
+                }
+
                 // 3. If it's neither a field nor a known method, then it's an error.
                 Err(format!(
                     "Struct '{}' has no field or method named '{}'",
@@ -363,6 +370,42 @@ impl TypeChecker {
                     }
                 }
             }
+            Expr::UnaryOp { op, expr } => {
+                let inner_type = self.check_expression(expr)?;
+                match op {
+                    UnaryOperator::Negate => {
+                        if inner_type == Type::Int || inner_type == Type::Float {
+                            Ok(inner_type)
+                        } else {
+                            Err(format!(
+                                "Cannot apply negation operator '-' to non-numeric type '{:?}'",
+                                inner_type
+                            ))
+                        }
+                    }
+                    UnaryOperator::LogicalNot => {
+                        if self.types_compatible(&Type::Bool, &inner_type) {
+                            Ok(Type::Bool)
+                        } else {
+                            Err(format!(
+                                "Cannot apply logical not '!' to non-boolean type '{:?}'",
+                                inner_type
+                            ))
+                        }
+                    }
+                    UnaryOperator::BitwiseNot => {
+                        if inner_type == Type::Int {
+                            Ok(Type::Int)
+                        } else {
+                            Err(format!(
+                                "Cannot apply bitwise not '~' to non-integer type '{:?}'",
+                                inner_type
+                            ))
+                        }
+                    }
+                    _ => Err(format!("Unsupported unary operator '{:?}'", op)),
+                }
+            }
             Expr::AddressOf {
                 is_mut,
                 expr: inner,
@@ -372,6 +415,7 @@ impl TypeChecker {
                     Expr::Identifier(_) | Expr::FieldAccess { .. } => Ok(Type::Ref {
                         is_mut: *is_mut,
                         inner: Box::new(t),
+                        is_unique: false,
                     }),
                     _ => Err("& can only take the address of an lvalue".to_string()),
                 }
@@ -384,7 +428,20 @@ impl TypeChecker {
                     Err("Cannot deref a non-reference value".to_string())
                 }
             }
-            _ => Ok(Type::Unknown),
+            Expr::Assignment { target, value } => {
+                self.check_expression(target)?;
+                self.check_expression(value)?;
+                Ok(Type::Void)
+            }
+            Expr::AnonymousFunction { body, .. } => {
+                self.symbols.enter_scope();
+                for stmt in body {
+                    self.check_statement(stmt)?;
+                }
+                self.symbols.exit_scope();
+                Ok(Type::Unknown)
+            }
+            _ => Err(format!("Unsupported expression type: {:?}", expr)),
         }
     }
 }

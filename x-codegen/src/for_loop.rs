@@ -11,6 +11,7 @@ impl<'ctx> CodeGen<'ctx> {
         start_expr: &Expr,
         end_expr: &Expr,
         body: &[Statement],
+        self_type: Option<&Type>,
     ) -> Result<(), String> {
         let function = self
             .builder
@@ -18,7 +19,7 @@ impl<'ctx> CodeGen<'ctx> {
             .and_then(|bb| bb.get_parent())
             .ok_or("Cannot generate for loop outside a function")?;
 
-        let start_val = self.gen_expr(start_expr)?;
+        let start_val = self.gen_expr(start_expr, self_type)?;
         let i32_type = self.context.i32_type();
         let start_val_i32 = match start_val {
             BasicValueEnum::IntValue(iv) => self
@@ -52,7 +53,7 @@ impl<'ctx> CodeGen<'ctx> {
             .build_load(i32_type, loop_var_alloca, &format!("{}_load", var_name))
             .unwrap()
             .into_int_value();
-        let end_val = self.gen_expr(end_expr)?;
+        let end_val = self.gen_expr(end_expr, self_type)?;
         let end_val_i32 = match end_val {
             BasicValueEnum::IntValue(iv) => self
                 .builder
@@ -82,7 +83,7 @@ impl<'ctx> CodeGen<'ctx> {
             .insert(var_name.to_string(), x_ast::Type::Int);
 
         for stmt in body {
-            self.gen_statement(stmt)?;
+            self.gen_statement(stmt, self_type)?;
             if self
                 .builder
                 .get_insert_block()
@@ -133,6 +134,7 @@ impl<'ctx> CodeGen<'ctx> {
         var_name: &str,
         iterator_expr: &Expr,
         body: &[Statement],
+        self_type: Option<&Type>,
     ) -> Result<(), String> {
         let function = self
             .builder
@@ -140,7 +142,7 @@ impl<'ctx> CodeGen<'ctx> {
             .and_then(|b| b.get_parent())
             .unwrap();
 
-        let array_struct_val = self.gen_expr(iterator_expr)?.into_struct_value();
+        let array_struct_val = self.gen_expr(iterator_expr, self_type)?.into_struct_value();
 
         let data_ptr = self
             .builder
@@ -206,7 +208,7 @@ impl<'ctx> CodeGen<'ctx> {
             .insert(var_name.to_string(), Type::Float);
 
         for stmt in body {
-            self.gen_statement(stmt)?;
+            self.gen_statement(stmt, self_type)?;
             if self
                 .builder
                 .get_insert_block()
