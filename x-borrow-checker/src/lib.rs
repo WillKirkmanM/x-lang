@@ -193,8 +193,10 @@ impl BorrowChecker {
                 if let Expr::AddressOf { is_mut, expr } = value {
                     match &**expr {
                         Expr::Identifier(tgt) => {
+                            let is_unique_borrow = matches!(type_ann, Some(Type::Ref { is_unique: true, .. }));
                             vi.ty = Type::Ref {
                                 is_mut: *is_mut,
+                                is_unique: is_unique_borrow,
                                 inner: Box::new(
                                     self.lookup_var(tgt)
                                         .map(|(v, _)| v.ty.clone())
@@ -208,8 +210,11 @@ impl BorrowChecker {
                             field: _field,
                         } => {
                             if let Expr::Identifier(tgt) = &**object {
+                                let is_unique_borrow = matches!(type_ann, Some(Type::Ref { is_unique: true, .. }));
+
                                 vi.ty = Type::Ref {
                                     is_mut: *is_mut,
+                                    is_unique: is_unique_borrow,
                                     inner: Box::new(
                                         self.lookup_var(tgt)
                                             .map(|(v, _)| v.ty.clone())
