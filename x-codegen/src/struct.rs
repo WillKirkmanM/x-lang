@@ -28,7 +28,19 @@ impl<'ctx> CodeGen<'ctx> {
             })
             .collect();
 
-        let struct_type = self.context.struct_type(&field_types, false);
+        let struct_type = if struct_def.layout == x_ast::Layout::SoA {
+            let ptr_field_types: Vec<BasicTypeEnum<'ctx>> = field_types
+                .iter()
+                .map(|_t| {
+                    self.context
+                        .ptr_type(inkwell::AddressSpace::default())
+                        .into()
+                })
+                .collect();
+            self.context.struct_type(&ptr_field_types, false)
+        } else {
+            self.context.struct_type(&field_types, false)
+        };
 
         self.struct_types.insert(
             struct_def.name.clone(),
@@ -39,6 +51,7 @@ impl<'ctx> CodeGen<'ctx> {
                     .iter()
                     .map(|(name, _)| name.clone())
                     .collect(),
+                struct_def.layout,
             ),
         );
 
@@ -48,8 +61,9 @@ impl<'ctx> CodeGen<'ctx> {
     pub(crate) fn gen_struct_instantiate(
         &mut self,
         struct_init: &x_ast::StructInit,
+        self_type: Option<&Type>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let (struct_type, field_names) =
+        let (struct_type, field_names, layout) =
             self.struct_types.get(&struct_init.name).ok_or_else(|| {
                 format!(
                     "Unknown struct type when generating struct instantiation: {}",
@@ -58,6 +72,28 @@ impl<'ctx> CodeGen<'ctx> {
             })?;
         let struct_type = *struct_type;
         let field_names = field_names.clone();
+
+        let layout = *layout;
+
+        if layout == x_ast::Layout::SoA {
+            let struct_alloca = self
+                .builder
+                .build_alloca(struct_type, &struct_init.name)
+                .unwrap();
+
+            for (field_name, value_expr) in &struct_init.fields {
+                let index = field_names.iter().position(|n| n == field_name).unwrap() as u32;
+                let field_ptr_ptr = self
+                    .builder
+                    .build_struct_gep(struct_type, struct_alloca, index, "field_ptr_ptr")
+                    .unwrap();
+
+                let field_val_ptr = self.gen_expr(value_expr, self_type)?.into_pointer_value();
+                let _ = self.builder.build_store(field_ptr_ptr, field_val_ptr);
+            }
+
+            return Ok(struct_alloca.into());
+        }
 
         // An aggregate value (like a struct) is built up field by field.
         // We start with an `undef` value of the struct's type.
@@ -76,7 +112,7 @@ impl<'ctx> CodeGen<'ctx> {
             let index = index as u32;
 
             // Generate the value for the field's initialiser expression.
-            let value = self.gen_expr(value_expr)?;
+            let value = self.gen_expr(value_expr, self_type)?;
             let expected_type = struct_type.get_field_type_at_index(index).unwrap();
 
             // Coerce the value to the field's expected type (e.g., int to float).
@@ -126,8 +162,20 @@ impl<'ctx> CodeGen<'ctx> {
         // Create a named, opaque struct first to allow for recursive types.
         let struct_type = self.context.opaque_struct_type(&struct_def.name);
 
-        // Now, set the body with the concrete field types.
-        struct_type.set_body(&field_types, false);
+        // Now, set the body with the concrete field types according to the layout.
+        if struct_def.layout == x_ast::Layout::SoA {
+            let ptr_field_types: Vec<BasicTypeEnum<'ctx>> = field_types
+                .iter()
+                .map(|_t| {
+                    self.context
+                        .ptr_type(inkwell::AddressSpace::default())
+                        .into()
+                })
+                .collect();
+            struct_type.set_body(&ptr_field_types, false);
+        } else {
+            struct_type.set_body(&field_types, false);
+        }
 
         let field_names: Vec<String> = struct_def
             .fields
@@ -135,12 +183,15 @@ impl<'ctx> CodeGen<'ctx> {
             .map(|(name, _)| name.clone())
             .collect();
 
-        self.struct_types
-            .insert(struct_def.name.clone(), (struct_type, field_names));
+        self.struct_types.insert(
+            struct_def.name.clone(),
+            (struct_type, field_names, struct_def.layout),
+        );
 
         info!(
             declared_struct = %struct_def.name,
             fields = ?struct_def.fields,
+            layout = ?struct_def.layout,
             "Declared struct"
         );
         Ok(())
@@ -164,6 +215,8 @@ impl<'ctx> CodeGen<'ctx> {
                 }
 
                 self.declare_struct(struct_def)?;
+                self.ast_structs
+                    .insert(struct_def.name.clone(), struct_def.clone());
             }
         }
         Ok(())
@@ -218,10 +271,22 @@ impl<'ctx> CodeGen<'ctx> {
             .map(|(fname, ftype)| (fname.clone(), self.substitute_type(ftype, &type_map)))
             .collect();
 
+        let concrete_invariant = if let Some(invariant_expr) = &blueprint.invariant {
+            let mut concrete_expr = *invariant_expr.clone();
+
+            // Recursively substitute types within the invariant expression.
+            self.substitute_in_expr(&mut concrete_expr, &type_map);
+            Some(Box::new(concrete_expr))
+        } else {
+            None
+        };
+
         let concrete_struct = Statement::StructDecl(StructDef {
             name: mangled_name.clone(),
             generic_params: None,
             fields: concrete_fields,
+            layout: blueprint.layout,
+            invariant: concrete_invariant,
         });
 
         info!(instantiated_struct = %mangled_name, "Instantiated new struct");
@@ -239,8 +304,9 @@ impl<'ctx> CodeGen<'ctx> {
         &mut self,
         object: &x_ast::Expr,
         field: &str,
+        self_type: Option<&Type>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let obj_val = self.gen_expr(object)?;
+        let obj_val = self.gen_expr(object, self_type)?;
         // Normalise to a PointerValue: if we have a StructValue, stack-allocate and store it so we can take a pointer.
         let object_ptr_val = match obj_val {
             BasicValueEnum::PointerValue(p) => p,
@@ -307,22 +373,48 @@ impl<'ctx> CodeGen<'ctx> {
         };
 
         // Use the recorded struct entry to GEP/load the field value (reliable path).
-        if let Some((struct_llvm_type, field_names)) = self.struct_types.get(&struct_name) {
+        if let Some((struct_llvm_type, field_names, layout)) = self.struct_types.get(&struct_name) {
             if let Some(index) = field_names.iter().position(|f_name| f_name == field) {
-                let field_ptr = self
-                    .builder
-                    .build_struct_gep(*struct_llvm_type, object_ptr_val, index as u32, "fieldptr")
-                    .map_err(|e| e.to_string())?;
-                let field_llvm_type = struct_llvm_type.get_field_types()[index];
-                return self
-                    .builder
-                    .build_load(field_llvm_type, field_ptr, "loadfield")
-                    .map_err(|e| e.to_string());
+                return match layout {
+                    x_ast::Layout::AoS => {
+                        // AoS: GEP to find field address, then load value.
+                        let field_ptr = self
+                            .builder
+                            .build_struct_gep(
+                                *struct_llvm_type,
+                                object_ptr_val,
+                                index as u32,
+                                "fieldptr",
+                            )
+                            .unwrap();
+                        let field_llvm_type = struct_llvm_type.get_field_types()[index];
+                        self.builder
+                            .build_load(field_llvm_type, field_ptr, "loadfield")
+                            .map_err(|e| e.to_string())
+                    }
+                    x_ast::Layout::SoA => {
+                        // SoA: GEP to find field *pointer*, load it, then the caller will use it as an array base.
+                        let field_ptr_ptr = self
+                            .builder
+                            .build_struct_gep(
+                                *struct_llvm_type,
+                                object_ptr_val,
+                                index as u32,
+                                "field_ptr_ptr",
+                            )
+                            .unwrap();
+                        let field_array_base_ptr = self
+                            .builder
+                            .build_load(field_ptr_ptr.get_type(), field_ptr_ptr, "field_array_base")
+                            .unwrap();
+                        Ok(field_array_base_ptr)
+                    }
+                };
             }
         }
 
         if let Some(methods) = self.struct_methods.get(&struct_name) {
-            if methods.contains(field) {
+            if methods.contains_key(field) {
                 let mangled_name = format!("{}_{}", struct_name, field);
                 let function = self.module.get_function(&mangled_name).ok_or_else(|| {
                     format!(
