@@ -2,7 +2,7 @@ use inkwell::{
     values::BasicValueEnum::{self, *},
     AddressSpace,
 };
-use x_ast::Expr;
+use x_ast::{Expr, Type};
 
 use crate::CodeGen;
 
@@ -11,8 +11,9 @@ impl<'ctx> CodeGen<'ctx> {
         &mut self,
         array: &Box<Expr>,
         index: &Box<Expr>,
+        self_type: Option<&Type>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let gep = self.get_array_element_ptr(array, index)?;
+        let gep = self.get_array_element_ptr(array, index, self_type)?;
 
         self.builder
             .build_load(self.context.f64_type(), gep, "array_element")
@@ -23,6 +24,7 @@ impl<'ctx> CodeGen<'ctx> {
         &mut self,
         array: &Box<Expr>,
         index: &Box<Expr>,
+        self_type: Option<&Type>,
     ) -> Result<inkwell::values::PointerValue<'ctx>, String> {
         fn get_base_array(expr: &Expr) -> Option<String> {
             match expr {
@@ -40,7 +42,7 @@ impl<'ctx> CodeGen<'ctx> {
             .get(&array_name)
             .ok_or_else(|| format!("Unknown array variable: {}", array_name))?;
 
-        let index_val = self.gen_expr(index)?;
+        let index_val = self.gen_expr(index, self_type)?;
 
         // Accept either a float or an int expression as the index.
         // If it's a float, convert to unsigned int; if it's an int, cast/resize to i32.
@@ -131,7 +133,7 @@ impl<'ctx> CodeGen<'ctx> {
                 .into_pointer_value()
         };
 
-        // Now, use the correctdata pointer to get the element
+        // Now, use the correct data pointer to get the element
         let element_ptr = unsafe {
             self.builder
                 .build_in_bounds_gep(
