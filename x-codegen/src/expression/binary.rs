@@ -1,5 +1,5 @@
 use inkwell::{values::BasicValueEnum, FloatPredicate, IntPredicate};
-use x_ast::{Expr, Operator};
+use x_ast::{Expr, Operator, Type};
 
 use crate::CodeGen;
 
@@ -9,9 +9,10 @@ impl<'ctx> CodeGen<'ctx> {
         left: &Expr,
         op: Operator,
         right: &Expr,
+        self_type: Option<&Type>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let lhs_val = self.gen_expr(left)?;
-        let rhs_val = self.gen_expr(right)?;
+        let lhs_val = self.gen_expr(left, self_type)?;
+        let rhs_val = self.gen_expr(right, self_type)?;
 
         let result = match (lhs_val, rhs_val) {
             // Integer / Integer
