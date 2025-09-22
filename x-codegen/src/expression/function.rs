@@ -10,6 +10,7 @@ impl<'ctx> CodeGen<'ctx> {
         &mut self,
         params: &Vec<String>,
         body: &Vec<Statement>,
+        self_type: Option<&Type>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let closure_name = self.get_unique_id();
 
@@ -97,7 +98,7 @@ impl<'ctx> CodeGen<'ctx> {
 
         let mut last_val: Option<BasicValueEnum<'ctx>> = None;
         for stmt in body {
-            last_val = self.gen_statement(stmt)?;
+            last_val = self.gen_statement(stmt, self_type)?;
             if self
                 .builder
                 .get_insert_block()
