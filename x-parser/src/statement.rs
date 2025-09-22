@@ -11,7 +11,18 @@ use x_ast::{Expr, ImplDef, Statement, TraitDef, Type};
 /// It expects a `statement` pair from the grammar, unwraps it,
 /// and calls the appropriate helper for the specific statement type inside.
 pub fn parse_statement(pair: Pair<Rule>) -> Statement {
-    let inner_pair = pair.into_inner().next().unwrap();
+    let mut inner = pair.into_inner();
+    let first_pair = inner.next().unwrap();
+
+    // If the first part of the statement is an attribute, the actual statement is the next part.
+    // If there's no next part, it's an error.
+    let inner_pair = if first_pair.as_rule() == Rule::attribute {
+        inner.next().expect(
+            "Attribute must be followed by a statement (e.g., a struct or function definition)",
+        )
+    } else {
+        first_pair
+    };
 
     match inner_pair.as_rule() {
         Rule::if_stmt => crate::r#if::parse_if_statement(inner_pair),
@@ -30,7 +41,7 @@ pub fn parse_statement(pair: Pair<Rule>) -> Statement {
         Rule::assignment_stmt => parse_assignment_statement(inner_pair),
 
         Rule::trait_decl => parse_trait_decl(inner_pair),
-        Rule::impl_decl => parse_impl_decl(inner_pair),
+        Rule::impl_def => parse_impl_def(inner_pair),
 
         Rule::expr => Statement::Expression {
             expr: parse_expr(inner_pair),
@@ -206,4 +217,50 @@ fn parse_l_value(pair: Pair<Rule>) -> Expr {
     }
 
     expr
+}
+
+/// Dispatches to the correct impl parser based on the inner rule.
+pub fn parse_impl_def(pair: Pair<Rule>) -> Statement {
+    let inner = pair.into_inner().next().unwrap();
+    match inner.as_rule() {
+        Rule::trait_impl_decl => parse_trait_impl_decl(inner),
+        Rule::inherent_impl_decl => parse_inherent_impl_decl(inner),
+        _ => unreachable!("impl_def must contain a trait_impl_decl or inherent_impl_decl"),
+    }
+}
+
+/// Parses an inherent impl block: `impl Type { ... }`
+fn parse_inherent_impl_decl(pair: Pair<Rule>) -> Statement {
+    let mut inner = pair.into_inner();
+    let type_name = parse_type(inner.next().unwrap());
+    let methods = inner
+        .map(|item| parse_function_def(item.into_inner().next().unwrap()))
+        .collect();
+
+    Statement::ImplDecl(ImplDef {
+        // Use an empty string to signify an inherent impl vs. a trait impl.
+        trait_name: "".to_string(),
+        type_name,
+        methods,
+    })
+}
+
+/// Parses a trait impl block: `impl Trait for Type { ... }`
+fn parse_trait_impl_decl(pair: Pair<Rule>) -> Statement {
+    let mut inner = pair.into_inner();
+    let trait_name = inner.next().unwrap().as_str().to_string();
+    let type_name = parse_type(inner.next().unwrap());
+
+    let methods = inner
+        .map(|item_pair| {
+            let function_def_pair = item_pair.into_inner().next().unwrap();
+            parse_function_def(function_def_pair)
+        })
+        .collect();
+
+    Statement::ImplDecl(ImplDef {
+        trait_name,
+        type_name,
+        methods,
+    })
 }
