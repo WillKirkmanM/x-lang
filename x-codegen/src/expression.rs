@@ -16,7 +16,11 @@ mod unary;
 use x_logging::debug;
 
 impl<'ctx> CodeGen<'ctx> {
-    pub(crate) fn gen_expr(&mut self, expr: &Expr) -> Result<BasicValueEnum<'ctx>, String> {
+    pub(crate) fn gen_expr(
+        &mut self,
+        expr: &Expr,
+        self_type: Option<&Type>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
         match expr {
             Expr::Int(n) => {
                 let i32_type = self.context.i32_type();
@@ -74,8 +78,11 @@ impl<'ctx> CodeGen<'ctx> {
                     Err(format!("Undefined variable or function: {}", name))
                 }
             }
-            Expr::BinaryOp { left, op, right } => self.handle_binary_op(left, op.clone(), right),
-            Expr::FunctionCall { name, args } => self.gen_function_call(name, args),
+            Expr::BinaryOp { left, op, right } => {
+                self.handle_binary_op(left, op.clone(), right, self_type)
+            }
+            Expr::FunctionCall { name, args } => self.gen_function_call(name, args, self_type),
+
             Expr::String(str_lit) => {
                 let s = str_lit
                     .parts
@@ -92,13 +99,18 @@ impl<'ctx> CodeGen<'ctx> {
                 params,
                 body,
                 return_type: _return_type,
-            } => self.handle_anonymous_function(params, body),
-            Expr::Array(elements) => self.handle_array_literal(elements),
-            Expr::ArrayAccess { array, index } => self.gen_array_access(array, index),
-            Expr::Assignment { target, value } => self.gen_assignment(target, value),
-            Expr::StructInstantiate(struct_init) => self.gen_struct_instantiate(struct_init),
-            Expr::FieldAccess { object, field } => self.gen_field_access(object, field),
-            Expr::UnaryOp { op, expr } => self.handle_unary_op(op.clone(), expr),
+            } => self.handle_anonymous_function(params, body, self_type),
+            Expr::Array(elements) => self.handle_array_literal(elements, self_type),
+            Expr::ArrayAccess { array, index } => self.gen_array_access(array, index, self_type),
+            Expr::Assignment { target, value } => self.gen_assignment(target, value, self_type),
+            Expr::StructInstantiate(struct_init) => {
+                self.gen_struct_instantiate(struct_init, self_type)
+            }
+            Expr::FieldAccess { object, field } => {
+                self.gen_field_access(object.as_ref(), field, self_type)
+            }
+
+            Expr::UnaryOp { op, expr } => self.handle_unary_op(op.clone(), expr, self_type),
             Expr::TypeLiteral(_) => {
                 Err("Type literal cannot be used as a runtime expression".to_string())
             }
@@ -119,7 +131,7 @@ impl<'ctx> CodeGen<'ctx> {
                 _ => Err("Address-of is currently only supported for identifiers".to_string()),
             },
             Expr::Deref { expr } => {
-                let val = self.gen_expr(expr)?;
+                let val = self.gen_expr(expr, self_type)?;
                 let ptr = val.into_pointer_value();
 
                 self.builder
@@ -216,7 +228,8 @@ impl<'ctx> CodeGen<'ctx> {
                         } else {
                             fmt_str.push_str("%g");
                         }
-                        let val = self.gen_expr(expr)?;
+
+                        let val = self.gen_expr(expr, None)?;
                         args.push(val);
                     }
                 },
@@ -256,7 +269,7 @@ impl<'ctx> CodeGen<'ctx> {
         if let Some(&print_fn) = self.imported_functions.get("print") {
             let compiled_args: Vec<_> = args
                 .iter()
-                .map(|arg| self.gen_expr(arg))
+                .map(|arg| self.gen_expr(arg, None))
                 .collect::<Result<Vec<_>, _>>()?
                 .into_iter()
                 .map(|val| val.into())
