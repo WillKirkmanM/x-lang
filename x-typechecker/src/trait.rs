@@ -23,7 +23,7 @@ impl TypeChecker {
                         }) = method_opt_stmt
                         {
                             let sig = FunctionSignature {
-                                param_types: params.iter().map(|(_, t)| t.clone()).collect(),
+                                param_types: params.iter().map(|p| p.ty.clone()).collect(),
                                 return_type: return_type.clone(),
                             };
                             trait_methods.insert(method_name.clone(), sig);

@@ -19,7 +19,7 @@ impl TypeChecker {
                     let mut type_map = HashMap::new();
                     let generic_func = self.symbols.generic_functions.get(name).unwrap();
                     for (param, arg_ty) in generic_func.params.iter().zip(arg_types.iter()) {
-                        self.infer_types_from_match(&param.1, arg_ty, &mut type_map)?;
+                        self.infer_types_from_match(&param.ty, arg_ty, &mut type_map)?;
                     }
                     let concrete_args: Vec<Type> = generic_func
                         .generic_params

@@ -1,6 +1,6 @@
 use crate::{expression::parse_expr, statement::parse_statement, types::parse_type, Rule};
 use pest::iterators::Pair;
-use x_ast::{Expr, Statement, Type};
+use x_ast::{Expr, Param, Statement, Type};
 
 pub fn parse_function_def(pair: Pair<Rule>) -> Statement {
     let mut inner = pair.into_inner();
@@ -29,7 +29,7 @@ pub fn parse_function_def(pair: Pair<Rule>) -> Statement {
         inner.next();
     }
 
-    let mut params: Vec<(String, Type)> = Vec::new();
+    let mut params: Vec<Param> = Vec::new();
     let params_pair = inner
         .next()
         .expect("Function definition is missing parameter list");
@@ -40,16 +40,29 @@ pub fn parse_function_def(pair: Pair<Rule>) -> Statement {
             match param_item.as_rule() {
                 Rule::param_normal => {
                     let mut pin = param_item.into_inner().peekable();
+
+                    // detect optional 'static' marker
+                    let is_static = pin.peek().map_or(false, |x| x.as_rule() == Rule::kw_static);
+                    if is_static {
+                        pin.next(); // consume 'static'
+                    }
+
+                    // consume optional 'mut' (owned/mutable param)
                     if pin.peek().map_or(false, |x| x.as_rule() == Rule::kw_mut) {
                         pin.next();
                     }
+
                     let name = pin.next().unwrap().as_str().to_string();
                     let ty = if let Some(type_rule) = pin.next() {
                         parse_type(type_rule)
                     } else {
                         Type::Int
                     };
-                    params.push((name, ty));
+                    params.push(Param {
+                        name,
+                        ty,
+                        is_static,
+                    });
                 }
                 Rule::param_self => {
                     let mut s = param_item.into_inner().peekable();
@@ -59,7 +72,12 @@ pub fn parse_function_def(pair: Pair<Rule>) -> Statement {
                         is_unique: false,
                         inner: Box::new(Type::TypeParameter("Self".to_string())),
                     };
-                    params.push(("self".to_string(), ty));
+                    // self can't be static, push as-is
+                    params.push(Param {
+                        name: "self".to_string(),
+                        ty,
+                        is_static: false,
+                    });
                 }
                 _ => unreachable!(),
             }

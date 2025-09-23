@@ -11,6 +11,8 @@ attribute_content = { (!"]" ~ ANY)* }
 attribute         = { "#[" ~ attribute_content ~ "]" }
 
 kw_mut    = { "mut" }
+kw_static = { "static" }
+
 keyword = _{
     "fn" ~ !ID_CONT
   | "let" ~ !ID_CONT
@@ -110,9 +112,9 @@ param_item = { param_self | param_normal }
 
 param_self = { "&" ~ kw_mut? ~ "self" ~ !ID_CONT }
 
-param_normal = { kw_mut? ~ identifier ~ (":" ~ type_specifier)? }
+param_normal = { kw_static? ~ kw_mut? ~ identifier ~ (":" ~ type_specifier)? }
 
-param         = { param_self | kw_mut? ~ identifier ~ (":" ~ type_specifier)? }
+param         = { param_self | kw_static? ~ kw_mut? ~ identifier ~ (":" ~ type_specifier)? }
 return_type_ann = { "->" ~ type_specifier }
 
 block = { "{" ~ statement* ~ expr? ~ "}" }
@@ -125,7 +127,7 @@ l_value  = { primary ~ postfix* }
 assign_op = { "=" }
 assignment_stmt = { l_value ~ assign_op ~ expr }
 
-if_stmt        = { "if" ~ expr ~ block ~ ("else" ~ block)? }
+if_stmt        = { "if" ~ expr ~ block ~ ("else" ~ (if_stmt | block))? }
 while_loop     = { "while" ~ expr ~ block }
 for_range_loop = { "for" ~ identifier ~ "in" ~ expr ~ ".." ~ expr ~ block }
 for_each_loop  = { "for" ~ identifier ~ "in" ~ expr ~ block }

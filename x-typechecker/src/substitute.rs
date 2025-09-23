@@ -26,10 +26,8 @@ impl TypeChecker {
                 params,
                 ..
             } => {
-                // For nested functions
-                // params: &mut Vec<(String, Type)>, return_type: &mut Type
-                for (_, p_type) in params.iter_mut() {
-                    *p_type = self.substitute_type(&*p_type, type_map);
+                for param in params.iter_mut() {
+                    param.ty = self.substitute_type(&param.ty, type_map);
                 }
                 *return_type = self.substitute_type(&*return_type, type_map);
                 for s in body.as_mut().unwrap().iter_mut() {
