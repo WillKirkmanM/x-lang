@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     path::Path,
 };
-use x_ast::{Program, Statement, StructDef, Type};
+use x_ast::{Param, Program, Statement, StructDef, Type};
 
 mod expression;
 mod function;
@@ -17,7 +17,7 @@ mod r#trait;
 pub struct FunctionDef {
     pub name: String,
     pub generic_params: Option<Vec<String>>,
-    pub params: Vec<(String, Type)>,
+    pub params: Vec<Param>,
     pub return_type: Type,
     pub body: Box<Vec<Statement>>,
     pub is_pure: bool,
@@ -228,7 +228,7 @@ impl TypeChecker {
                     ..
                 } => {
                     let sig = FunctionSignature {
-                        param_types: params.iter().map(|(_, t)| t.clone()).collect(),
+                        param_types: params.iter().map(|p| p.ty.clone()).collect(),
                         return_type: return_type.clone(),
                     };
                     if *is_multi {
@@ -258,10 +258,7 @@ impl TypeChecker {
                                 } = method
                                 {
                                     let sig = FunctionSignature {
-                                        param_types: params
-                                            .iter()
-                                            .map(|(_, t)| t.clone())
-                                            .collect(),
+                                        param_types: params.iter().map(|p| p.ty.clone()).collect(),
                                         return_type: return_type.clone(),
                                     };
                                     self.symbols.add_struct_method(
