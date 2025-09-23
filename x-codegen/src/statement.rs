@@ -124,7 +124,6 @@ impl<'ctx> CodeGen<'ctx> {
                 else_block,
             } => self
                 .gen_if(condition, then_block, else_block, self_type)
-
                 .map(|opt_float_value| opt_float_value.map(|float_value| float_value.into())),
             Statement::WhileLoop { condition, body } => {
                 self.gen_while_loop(condition, body, self_type)?;
@@ -242,7 +241,7 @@ impl<'ctx> CodeGen<'ctx> {
                         ..
                     } = method_stmt
                     {
-                        self.gen_function_def(name, params, return_type, body, None)?;
+                        self.gen_function_def(name, params.as_slice(), return_type, body, None)?;
                     } else {
                         return Err("Impl block can only contain function definitions.".to_string());
                     }
@@ -280,7 +279,10 @@ impl<'ctx> CodeGen<'ctx> {
                     _ => Err(format!("Array access on non-array type: {:?}", array_type)),
                 }
             }
-            Expr::FieldAccess { object, field: _field } => {
+            Expr::FieldAccess {
+                object,
+                field: _field,
+            } => {
                 let object_type = self.infer_ast_type_from_expr(object)?;
                 let base_type = match &object_type {
                     x_ast::Type::Ref { inner, .. } => &**inner,
