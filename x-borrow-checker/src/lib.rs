@@ -137,8 +137,8 @@ impl BorrowChecker {
             Statement::StructDecl(_) => Ok(()),
             Statement::Function { params, body, .. } => {
                 self.enter_scope();
-                for (pname, pty) in params {
-                    self.declare_var(pname, pty.clone());
+                for param in params {
+                    self.declare_var(&param.name, param.ty.clone());
                 }
                 for st in body.as_ref().unwrap().iter() {
                     self.check_statement(st)?;
@@ -193,7 +193,13 @@ impl BorrowChecker {
                 if let Expr::AddressOf { is_mut, expr } = value {
                     match &**expr {
                         Expr::Identifier(tgt) => {
-                            let is_unique_borrow = matches!(type_ann, Some(Type::Ref { is_unique: true, .. }));
+                            let is_unique_borrow = matches!(
+                                type_ann,
+                                Some(Type::Ref {
+                                    is_unique: true,
+                                    ..
+                                })
+                            );
                             vi.ty = Type::Ref {
                                 is_mut: *is_mut,
                                 is_unique: is_unique_borrow,
@@ -210,7 +216,13 @@ impl BorrowChecker {
                             field: _field,
                         } => {
                             if let Expr::Identifier(tgt) = &**object {
-                                let is_unique_borrow = matches!(type_ann, Some(Type::Ref { is_unique: true, .. }));
+                                let is_unique_borrow = matches!(
+                                    type_ann,
+                                    Some(Type::Ref {
+                                        is_unique: true,
+                                        ..
+                                    })
+                                );
 
                                 vi.ty = Type::Ref {
                                     is_mut: *is_mut,
