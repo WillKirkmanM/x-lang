@@ -5,7 +5,7 @@ use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
 use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue};
 use inkwell::AddressSpace;
-use x_ast::{Expr, ExternParam, Statement, StringLiteral, StringPart, StructDef, Type};
+use x_ast::{Expr, ExternParam, Param, Statement, StringLiteral, StringPart, StructDef, Type};
 
 use x_logging::{debug, error, info, trace, warn};
 use x_typechecker::FunctionSignature;
@@ -109,6 +109,58 @@ impl<'ctx> CodeGen<'ctx> {
         args: &[Expr],
         self_type: Option<&x_ast::Type>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        // Check if this is a function we can specialise
+        if let Some(generic_fn_stmt_ref) = self.specialisable_functions.get(name) {
+            let generic_fn_stmt = generic_fn_stmt_ref.clone();
+            // Expect the stored value to be a Function statement; if it's not, skip.
+            if let Statement::Function { params, .. } = &generic_fn_stmt {
+                let mut static_args = HashMap::new();
+                let mut is_specialisable = true;
+
+                // Collect static arguments and check if they are compile-time constants
+                for (i, param) in params.iter().enumerate() {
+                    if param.is_static {
+                        match args.get(i) {
+                            Some(a) => match a {
+                                Expr::Int(_)
+                                | Expr::Float(_)
+                                | Expr::Boolean(_)
+                                | Expr::String(_) => {
+                                    static_args.insert(param.name.clone(), a.clone());
+                                }
+                                _ => {
+                                    // If any static arg is not a constant, we can't specialise this call.
+                                    is_specialisable = false;
+                                    break;
+                                }
+                            },
+                            None => {
+                                is_specialisable = false;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if is_specialisable {
+                    // Mangle the name to include the constant values
+                    let mangled_name = self.mangle_specialised_name(name, params, args);
+
+                    // If this specialisation hasn't been compiled yet, create it now.
+                    if self.module.get_function(&mangled_name).is_none() {
+                        self.specialise_and_compile_function(
+                            &mangled_name,
+                            &generic_fn_stmt,
+                            &static_args,
+                        )?;
+                    }
+
+                    // Rewrite the call to use the new, specialised function
+                    return self.gen_function_call(&mangled_name, args, self_type);
+                }
+            }
+        }
+
         if name == "print" && args.len() == 1 {
             return self.gen_poly_print(&args[0], self_type);
         }
@@ -520,7 +572,7 @@ impl<'ctx> CodeGen<'ctx> {
     pub fn compile_function(
         &mut self,
         name: &str,
-        params: &[(String, Type)],
+        params: Vec<(String, x_ast::Type)>,
         body: &[Statement],
         is_pure: bool,
         is_memoised: bool,
@@ -747,7 +799,7 @@ impl<'ctx> CodeGen<'ctx> {
                     let sig_has_type_param = Self::type_contains_type_parameter(return_type)
                         || params
                             .iter()
-                            .any(|(_, pty)| Self::type_contains_type_parameter(pty));
+                            .any(|p| Self::type_contains_type_parameter(&p.ty));
                     if sig_has_type_param {
                         debug!(name = %name, "skipping declaration: signature contains unresolved type-parameters");
                         continue;
@@ -765,7 +817,7 @@ impl<'ctx> CodeGen<'ctx> {
                             name,
                             params
                                 .iter()
-                                .map(|(_, t)| t.to_string())
+                                .map(|p| p.ty.to_string())
                                 .collect::<Vec<_>>()
                                 .join("$")
                         );
@@ -775,8 +827,8 @@ impl<'ctx> CodeGen<'ctx> {
                         }
                         if self.module.get_function(&mangled).is_none() {
                             let mut param_types: Vec<BasicMetadataTypeEnum<'ctx>> = Vec::new();
-                            for (_, pty) in params {
-                                let llvm_ty = self.map_ast_type_to_llvm(pty);
+                            for p in params.iter() {
+                                let llvm_ty = self.map_ast_type_to_llvm(&p.ty);
                                 param_types.push(llvm_ty.into());
                             }
                             let ret_llvm = if *return_type == Type::Void {
@@ -790,7 +842,12 @@ impl<'ctx> CodeGen<'ctx> {
                             };
                             let func = self.module.add_function(&mangled, fn_type, None);
                             self.functions.insert(mangled.clone(), func);
-                            self.apply_function_parameter_attributes(func, params);
+
+                            let param_pairs: Vec<(String, x_ast::Type)> = params
+                                .iter()
+                                .map(|p| (p.name.clone(), p.ty.clone()))
+                                .collect();
+                            self.apply_function_parameter_attributes(func, &param_pairs);
 
                             if *is_pure {
                                 self.add_fn_attr(func, "readnone");
@@ -802,7 +859,7 @@ impl<'ctx> CodeGen<'ctx> {
                                 self.add_fn_attr(func, "nounwind");
                             }
                             self.multi_variants.entry(name.clone()).or_default().push((
-                                params.iter().map(|(_, t)| t.clone()).collect(),
+                                params.iter().map(|p| p.ty.clone()).collect(),
                                 mangled.clone(),
                             ));
                             debug!(mangled = %mangled, return_type = ?return_type, "declared multi variant");
@@ -812,8 +869,8 @@ impl<'ctx> CodeGen<'ctx> {
                             && self.module.get_function(name).is_none()
                         {
                             let mut param_types: Vec<BasicMetadataTypeEnum<'ctx>> = Vec::new();
-                            for (_, pty) in params {
-                                param_types.push(self.map_ast_type_to_llvm(pty).into());
+                            for p in params.iter() {
+                                param_types.push(self.map_ast_type_to_llvm(&p.ty).into());
                             }
                             let fn_type = if *return_type == Type::Void {
                                 self.context.void_type().fn_type(&param_types, false)
@@ -823,7 +880,11 @@ impl<'ctx> CodeGen<'ctx> {
                             };
                             let resolver = self.module.add_function(name, fn_type, None);
                             self.functions.insert(name.clone(), resolver);
-                            self.apply_function_parameter_attributes(resolver, params);
+                            let param_pairs: Vec<(String, x_ast::Type)> = params
+                                .iter()
+                                .map(|p| (p.name.clone(), p.ty.clone()))
+                                .collect();
+                            self.apply_function_parameter_attributes(resolver, &param_pairs);
                             if *is_pure {
                                 self.add_fn_attr(resolver, "readnone");
                             }
@@ -847,7 +908,9 @@ impl<'ctx> CodeGen<'ctx> {
                     }
 
                     let mut param_types: Vec<BasicMetadataTypeEnum<'ctx>> = Vec::new();
-                    for (idx, (pname, pty)) in params.iter().enumerate() {
+                    for (idx, p) in params.iter().enumerate() {
+                        let pname = &p.name;
+                        let pty = &p.ty;
                         debug!(func = %name, idx = idx, param_name = %pname, ast_type = ?pty, "mapping param");
                         let llvm_ty = self.map_ast_type_to_llvm(pty);
                         debug!(func = %name, idx = idx, param_name = %pname, llvm_type = ?llvm_ty, "mapped param");
@@ -867,7 +930,11 @@ impl<'ctx> CodeGen<'ctx> {
                     info!(name = %name, fn_type = ?fn_type, "adding function to module");
                     let func = self.module.add_function(name, fn_type, None);
                     self.functions.insert(name.clone(), func);
-                    self.apply_function_parameter_attributes(func, params);
+                    let param_pairs: Vec<(String, x_ast::Type)> = params
+                        .iter()
+                        .map(|p| (p.name.clone(), p.ty.clone()))
+                        .collect();
+                    self.apply_function_parameter_attributes(func, &param_pairs);
 
                     if *is_pure {
                         self.add_fn_attr(func, "readnone");
@@ -904,9 +971,13 @@ impl<'ctx> CodeGen<'ctx> {
                             } = method
                             {
                                 let mangled_name = format!("{}_{}", struct_name, name);
+                                let param_pairs: Vec<(String, x_ast::Type)> = params
+                                    .iter()
+                                    .map(|p| (p.name.clone(), p.ty.clone()))
+                                    .collect();
                                 self.declare_function_signature(
                                     &mangled_name,
-                                    params,
+                                    &param_pairs,
                                     return_type,
                                     Some(&impl_def.type_name),
                                 )?;
@@ -937,9 +1008,13 @@ impl<'ctx> CodeGen<'ctx> {
                         for (method_name, params, return_type) in methods_to_declare {
                             let mangled_name = format!("{}_{}", struct_name, &method_name);
                             info!(mangled = %mangled_name, "declaring synthesised default method");
+                            let param_pairs: Vec<(String, x_ast::Type)> = params
+                                .iter()
+                                .map(|p| (p.name.clone(), p.ty.clone()))
+                                .collect();
                             self.declare_function_signature(
                                 &mangled_name,
-                                &params,
+                                &param_pairs,
                                 &return_type,
                                 Some(&impl_def.type_name),
                             )?;
@@ -1037,11 +1112,15 @@ impl<'ctx> CodeGen<'ctx> {
             self.substitute_in_statement(stmt, &type_map, gen_structs, concrete_statements)?;
         }
 
-        let concrete_params = params
+        let concrete_params: Vec<Param> = params
             .iter()
             .map(|(param_name, param_type)| {
                 let concrete_param_type = self.substitute_type(param_type, &type_map);
-                (param_name.clone(), concrete_param_type)
+                Param {
+                    name: param_name.clone(),
+                    ty: concrete_param_type,
+                    is_static: false,
+                }
             })
             .collect();
 
@@ -1087,7 +1166,7 @@ impl<'ctx> CodeGen<'ctx> {
                         } = method_stmt
                         {
                             let sig = FunctionSignature {
-                                param_types: params.iter().map(|(_, t)| t.clone()).collect(),
+                                param_types: params.iter().map(|p| p.ty.clone()).collect(),
                                 return_type: return_type.clone(),
                             };
                             method_names_map.insert(name.clone(), sig);
@@ -1107,10 +1186,7 @@ impl<'ctx> CodeGen<'ctx> {
                                 }) = default_body_opt
                                 {
                                     let sig = FunctionSignature {
-                                        param_types: params
-                                            .iter()
-                                            .map(|(_, t)| t.clone())
-                                            .collect(),
+                                        param_types: params.iter().map(|p| p.ty.clone()).collect(),
                                         return_type: return_type.clone(),
                                     };
                                     method_names_map.insert(method_name.clone(), sig);
@@ -1158,7 +1234,7 @@ impl<'ctx> CodeGen<'ctx> {
                     let sig_has_type_param = Self::type_contains_type_parameter(return_type)
                         || params
                             .iter()
-                            .any(|(_n, p_ty)| Self::type_contains_type_parameter(p_ty));
+                            .any(|p| Self::type_contains_type_parameter(&p.ty));
                     if sig_has_type_param {
                         trace!(name = %name, "Skipping compilation of function with unresolved type-parameters");
                         continue;
@@ -1170,7 +1246,7 @@ impl<'ctx> CodeGen<'ctx> {
                             name,
                             params
                                 .iter()
-                                .map(|(_, t)| t.to_string())
+                                .map(|p| p.ty.to_string())
                                 .collect::<Vec<_>>()
                                 .join("$")
                         )
@@ -1312,7 +1388,7 @@ impl<'ctx> CodeGen<'ctx> {
     pub fn gen_function_def(
         &mut self,
         name: &str,
-        params: &[(String, x_ast::Type)],
+        params: &[x_ast::Param],
         _return_type: &x_ast::Type,
         body: &Option<Box<Vec<Statement>>>,
         self_type: Option<&x_ast::Type>,
@@ -1339,16 +1415,19 @@ impl<'ctx> CodeGen<'ctx> {
             self.current_function = Some(function);
             self.fn_param_names.insert(
                 name.to_string(),
-                params.iter().map(|(s, _)| s.clone()).collect(),
+                params.iter().map(|p| p.name.clone()).collect(),
             );
 
-            for (i, (param_name, param_ast_type)) in params.iter().enumerate() {
+            for (i, param) in params.iter().enumerate() {
+                let param_name = &param.name;
+                let param_ast_type = &param.ty;
+
                 let mut final_ast_type = param_ast_type.clone();
                 if let x_ast::Type::Ref {
                     is_mut,
                     is_unique,
                     inner,
-                } = param_ast_type
+                } = &param.ty
                 {
                     if let x_ast::Type::TypeParameter(p_name) = &**inner {
                         if p_name == "Self" {
