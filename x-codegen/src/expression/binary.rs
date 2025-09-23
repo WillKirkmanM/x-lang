@@ -15,6 +15,42 @@ impl<'ctx> CodeGen<'ctx> {
         let rhs_val = self.gen_expr(right, self_type)?;
 
         let result = match (lhs_val, rhs_val) {
+            // Pointer / Pointer comparisons (e.g. string pointers)
+            (BasicValueEnum::PointerValue(lhs_ptr), BasicValueEnum::PointerValue(rhs_ptr)) => {
+                match op {
+                    Operator::Equal | Operator::NotEqual => {
+                        // compare pointers by casting to integer and comparing
+                        let lhs_int = self
+                            .builder
+                            .build_ptr_to_int(lhs_ptr, self.context.i64_type(), "ptr_to_int_l")
+                            .map_err(|e| e.to_string())?;
+                        let rhs_int = self
+                            .builder
+                            .build_ptr_to_int(rhs_ptr, self.context.i64_type(), "ptr_to_int_r")
+                            .map_err(|e| e.to_string())?;
+
+                        let pred = if matches!(op, Operator::Equal) {
+                            IntPredicate::EQ
+                        } else {
+                            IntPredicate::NE
+                        };
+
+                        let cmp = self
+                            .builder
+                            .build_int_compare(pred, lhs_int, rhs_int, "ptr_cmptmp")
+                            .map_err(|e| e.to_string())?;
+                        let f = self
+                            .builder
+                            .build_unsigned_int_to_float(cmp, self.context.f64_type(), "booltmp")
+                            .map_err(|e| e.to_string())?;
+                        Ok(f.into())
+                    }
+                    _ => Err(
+                        "Only equality/inequality comparisons are supported for pointers"
+                            .to_string(),
+                    ),
+                }
+            }
             // Integer / Integer
             (BasicValueEnum::IntValue(lhs_int), BasicValueEnum::IntValue(rhs_int)) => {
                 let zero_i64 = self.context.i64_type().const_zero();
