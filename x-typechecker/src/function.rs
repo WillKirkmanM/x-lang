@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use x_ast::{Statement, Type};
+use x_ast::{Param, Statement, Type};
 
 use crate::{FunctionSignature, TypeChecker};
 
@@ -54,7 +54,10 @@ impl TypeChecker {
         specialised_func.params = specialised_func
             .params
             .into_iter()
-            .map(|(pname, ptype)| (pname, self.substitute_type(&ptype, &type_map)))
+            .map(|param| Param {
+                ty: self.substitute_type(&param.ty, &type_map),
+                ..param
+            })
             .collect();
         specialised_func.return_type =
             self.substitute_type(&specialised_func.return_type, &type_map);
@@ -81,7 +84,7 @@ impl TypeChecker {
                 param_types: specialised_func
                     .params
                     .into_iter()
-                    .map(|(_, t)| t)
+                    .map(|param| param.ty)
                     .collect(),
                 return_type: specialised_func.return_type,
             },
