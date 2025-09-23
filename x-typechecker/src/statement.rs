@@ -80,8 +80,9 @@ impl TypeChecker {
                 ..
             } => {
                 self.symbols.enter_scope();
-                for (pname, ptype) in params.iter() {
-                    self.symbols.add_variable(pname.clone(), ptype.clone());
+                for param in params {
+                    self.symbols
+                        .add_variable(param.name.clone(), param.ty.clone());
                 }
                 for st in body.as_mut().unwrap().iter_mut() {
                     self.check_statement(st)?;
