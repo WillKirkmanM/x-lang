@@ -118,7 +118,7 @@ pub enum Statement {
     Function {
         name: String,
         generic_params: Option<Vec<String>>,
-        params: Vec<(String, Type)>,
+        params: Vec<Param>,
         return_type: Type,
         body: Option<Box<Vec<Statement>>>,
         is_pure: bool,
@@ -176,9 +176,16 @@ pub struct ExternParam {
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Default)]
 pub enum Layout {
-   #[default]
-   AoS, // Array of Structs
-   SoA, // Struct of Arrays
+    #[default]
+    AoS, // Array of Structs
+    SoA, // Struct of Arrays
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Param {
+    pub name: String,
+    pub ty: Type,
+    pub is_static: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -223,8 +230,15 @@ pub enum Type {
     Unknown,
     Array(Box<Type>),
     TypeParameter(String),
-    GenericInstance { name: String, type_args: Vec<Type> },
-    Ref { is_mut: bool, is_unique: bool, inner: Box<Type> },
+    GenericInstance {
+        name: String,
+        type_args: Vec<Type>,
+    },
+    Ref {
+        is_mut: bool,
+        is_unique: bool,
+        inner: Box<Type>,
+    },
 }
 
 impl std::fmt::Display for Type {
@@ -247,10 +261,16 @@ impl std::fmt::Display for Type {
                     .join(", ");
                 write!(f, "{}<{}>", name, args)
             }
-            Type::Ref { is_mut, is_unique, inner } => {
-                write!(f, "&{}{}{}", 
+            Type::Ref {
+                is_mut,
+                is_unique,
+                inner,
+            } => {
+                write!(
+                    f,
+                    "&{}{}{}",
                     if *is_unique { "unique " } else { "" },
-                    if *is_mut { "mut " } else { "" }, 
+                    if *is_mut { "mut " } else { "" },
                     inner
                 )
             }
