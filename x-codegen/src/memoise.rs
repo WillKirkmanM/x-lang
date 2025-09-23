@@ -1,7 +1,7 @@
 use inkwell::types::BasicTypeEnum;
 use inkwell::values::FunctionValue;
 use inkwell::AddressSpace;
-use x_ast::{Statement, Type};
+use x_ast::{Param, Statement};
 
 use crate::CodeGen;
 
@@ -12,7 +12,7 @@ impl<'ctx> CodeGen<'ctx> {
     pub fn compile_memoised_function(
         &mut self,
         name: &str,
-        params: &[(String, Type)],
+        params: Vec<Param>,
         body: &[Statement],
     ) -> Result<FunctionValue<'ctx>, String> {
         let wrapper_fn = self.module.get_function(name).unwrap();
@@ -44,7 +44,16 @@ impl<'ctx> CodeGen<'ctx> {
 
         // Create and compile the core implementation function
         self.module.add_function(&impl_name, fn_type, None);
-        self.compile_function(&impl_name, params, body, true, false)?;
+        self.compile_function(
+            &impl_name,
+            params
+                .iter()
+                .map(|p| (p.name.clone(), p.ty.clone()))
+                .collect::<Vec<_>>(),
+            body,
+            true,
+            false,
+        )?;
 
         // Wrapper Function Logic
         let entry = self.context.append_basic_block(wrapper_fn, "entry");
