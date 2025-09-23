@@ -33,6 +33,7 @@ pub mod coercion;
 pub mod r#comparison;
 pub mod memoise;
 pub mod multi;
+pub mod specialise;
 pub mod substitute;
 pub mod r#trait;
 pub mod r#type;
@@ -65,6 +66,7 @@ pub struct CodeGen<'ctx> {
 
     // Structs and traits
     struct_types: HashMap<String, (StructType<'ctx>, Vec<String>, x_ast::Layout)>,
+    specialisable_functions: HashMap<String, Statement>,
     ast_structs: HashMap<String, StructDef>,
     traits: HashMap<String, TraitDef>,
     struct_methods: HashMap<String, HashMap<String, FunctionSignature>>,
@@ -79,7 +81,6 @@ pub struct CodeGen<'ctx> {
     original_to_generated: HashMap<String, String>,
     generated_to_original: HashMap<String, String>,
 }
-
 
 impl<'ctx> CodeGen<'ctx> {
     pub fn new(context: &'ctx Context, module_name: &str) -> Self {
@@ -115,6 +116,7 @@ impl<'ctx> CodeGen<'ctx> {
             current_function: None,
             memoisation_caches: HashMap::new(),
             monomorph_scope: HashMap::new(),
+            specialisable_functions: HashMap::new(),
             ast_structs: HashMap::new(),
             fn_param_names: HashMap::new(),
             multi_variants: HashMap::new(),
@@ -203,12 +205,12 @@ impl<'ctx> CodeGen<'ctx> {
                 } => {
                     // Treat as generic if explicit generics OR signature still contains type params.
                     let sig_has_tps = sig_contains_type_params(&return_type)
-                        || params.iter().any(|(_, p)| sig_contains_type_params(p));
+                        || params.iter().any(|p| sig_contains_type_params(&p.ty));
 
                     if generic_params.is_some() || sig_has_tps {
                         let mut gp_set = std::collections::HashSet::new();
-                        for (_, p) in &params {
-                            collect_param_names(p, &mut gp_set);
+                        for p in &params {
+                            collect_param_names(&p.ty, &mut gp_set);
                         }
                         collect_param_names(&return_type, &mut gp_set);
                         let gp_list = gp_set.into_iter().collect::<Vec<_>>();
@@ -216,7 +218,10 @@ impl<'ctx> CodeGen<'ctx> {
                         generic_functions.insert(
                             name.clone(),
                             (
-                                params.clone(),
+                                params
+                                    .iter()
+                                    .map(|p| (p.name.clone(), p.ty.clone()))
+                                    .collect::<Vec<_>>(),
                                 return_type.clone(),
                                 body.clone().unwrap_or_default(),
                                 is_pure,
@@ -314,8 +319,8 @@ impl<'ctx> CodeGen<'ctx> {
             {
                 if let Some(body_vec) = body.as_ref() {
                     let mut mangled = name.clone();
-                    for (_param_name, param_type) in params.iter() {
-                        mangled.push_str(&format!("${}", param_type));
+                    for param in params.iter() {
+                        mangled.push_str(&format!("${}", param.ty));
                     }
 
                     if let Some(func) = self.module.get_function(&mangled) {
@@ -323,7 +328,10 @@ impl<'ctx> CodeGen<'ctx> {
                             trace!("Compiling multi variant impl: {}", mangled);
                             self.compile_function(
                                 &mangled,
-                                params,
+                                params
+                                    .iter()
+                                    .map(|p| (p.name.clone(), p.ty.clone()))
+                                    .collect::<Vec<_>>(),
                                 body_vec,
                                 *is_pure,
                                 *is_memoised,
@@ -393,7 +401,16 @@ impl<'ctx> CodeGen<'ctx> {
                 {
                     if let Some(body_vec) = body {
                         // Compile the function body into the previously-declared function
-                        self.compile_function("main", &params, &body_vec, is_pure, is_memoised)?;
+                        self.compile_function(
+                            "main",
+                            params
+                                .iter()
+                                .map(|p| (p.name.clone(), p.ty.clone()))
+                                .collect::<Vec<_>>(),
+                            &body_vec,
+                            is_pure,
+                            is_memoised,
+                        )?;
                     } else {
                         error!("AST 'main' found but has no body");
                         return Err("AST 'main' has no body".to_string());
@@ -574,4 +591,4 @@ impl<'ctx> CodeGen<'ctx> {
         debug!("get_ir: len={}", ir.len());
         ir
     }
-   }
+}
