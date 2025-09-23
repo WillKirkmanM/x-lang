@@ -75,7 +75,10 @@ impl<'ctx> CodeGen<'ctx> {
                 } => {
                     self.compile_function(
                         name,
-                        &params[..],
+                        params
+                            .iter()
+                            .map(|p| (p.name.clone(), p.ty.clone()))
+                            .collect(),
                         &body.clone().unwrap(),
                         *is_pure,
                         *is_memoised,
