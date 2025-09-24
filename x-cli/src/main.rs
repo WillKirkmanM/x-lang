@@ -202,6 +202,9 @@ fn build(
             let runtime_h_path = "cache_runtime.h";
             fs::write(runtime_h_path, runtime_h)
                 .map_err(|e| format!("Failed to write runtime header: {}", e))?;
+
+            let dispatch_c = include_str!("../../runtime/parallel.c");
+            let runtime_c = format!("{}\n\n{}\n", runtime_c, dispatch_c);
             fs::write(runtime_c_path, runtime_c)
                 .map_err(|e| format!("Failed to write runtime C: {}", e))?;
             runtime_c_path.to_string()
@@ -215,7 +218,10 @@ fn build(
         clang_args.push("-fPIE".to_string());
         clang_args.push("-pie".to_string());
         clang_args.push("-lm".to_string());
+        clang_args.push("-lm".to_string());
     }
+
+    clang_args.push("-fopenmp".to_string());
 
     for path in lib_paths {
         clang_args.push("-L".to_string());
