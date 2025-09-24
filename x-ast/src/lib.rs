@@ -143,6 +143,7 @@ pub enum Statement {
         start: Box<Expr>,
         end: Box<Expr>,
         body: Vec<Statement>,
+        is_parallel: bool,
     },
     If {
         condition: Box<Expr>,
@@ -150,13 +151,14 @@ pub enum Statement {
         else_block: Option<Vec<Statement>>,
     },
     WhileLoop {
-        condition: Expr,
+        condition: Box<Expr>,
         body: Vec<Statement>,
     },
     ForEachLoop {
         var: String,
         iterator: Box<Expr>,
         body: Vec<Statement>,
+        is_parallel: bool,
     },
 
     StructDecl(StructDef),
