@@ -106,14 +106,16 @@ impl<'ctx> CodeGen<'ctx> {
                 start,
                 end,
                 body,
+                is_parallel
             } => {
-                self.gen_for_range_loop(var, start, end, body, self_type)?;
+                self.gen_for_range_loop(var, start, end, body, *is_parallel, self_type)?;
                 Ok(None)
             }
             Statement::ForEachLoop {
                 var,
                 iterator,
                 body,
+                is_parallel: _is_parallel
             } => {
                 self.gen_for_each_loop(var, iterator, body, self_type)?;
                 Ok(None)
