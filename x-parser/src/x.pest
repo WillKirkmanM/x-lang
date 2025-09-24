@@ -64,7 +64,7 @@ custom_type  = { type_identifier ~ ("<" ~ generic_arg ~ ("," ~ generic_arg)* ~ "
 
 unique_kw = { "unique" }
 ref_type     = { "&" ~ unique_kw? ~ kw_mut? ~ lifetime? ~ (array_type | basic_type | custom_type) ~ array_postfix* }
-array_postfix = { "[]" }
+array_postfix = { "[]" | "[" ~ integer ~ "]" }
 
 array_type = { "[" ~ type ~ "]" }
 
@@ -129,8 +129,10 @@ assignment_stmt = { l_value ~ assign_op ~ expr }
 
 if_stmt        = { "if" ~ expr ~ block ~ ("else" ~ (if_stmt | block))? }
 while_loop     = { "while" ~ expr ~ block }
-for_range_loop = { "for" ~ identifier ~ "in" ~ expr ~ ".." ~ expr ~ block }
-for_each_loop  = { "for" ~ identifier ~ "in" ~ expr ~ block }
+parallel_kw    = { "parallel" }
+for_range_loop = { parallel_kw? ~ "for" ~ identifier ~ "in" ~ expr ~ ".." ~ expr ~ block }
+for_each_loop  = { parallel_kw? ~ "for" ~ identifier ~ "in" ~ expr ~ block }
+
 become_stmt    = { "become" ~ function_call ~ ";" }
 return_stmt    = { "return" ~ expr? ~ ";" }
 
