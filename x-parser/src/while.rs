@@ -13,6 +13,6 @@ pub fn parse_while_loop(pair: Pair<Rule>) -> Statement {
         single_statement => vec![single_statement],
     };
     
-    Statement::WhileLoop { condition, body }
+    Statement::WhileLoop { condition: Box::new(condition), body }
 }
 
